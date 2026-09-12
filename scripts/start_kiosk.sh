@@ -37,7 +37,6 @@ exec cage -- chromium \
   --disable-infobars \
   --no-first-run \
   --ozone-platform=wayland \
-  --enable-features=OverlayScrollbar \
   --renderer-process-limit=1 \
   --js-flags="--max-old-space-size=128" \
   --disable-dev-shm-usage \

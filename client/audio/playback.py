@@ -59,6 +59,12 @@ class AudioPlayer:
         path = os.path.join(CHIME_DIR, chime_name)
         self.play_wav(path)
 
+    def play_chime_async(self, chime_name: str = "wake.wav"):
+        """Plays chime in background thread so recording is not blocked or delayed."""
+        import threading
+        t = threading.Thread(target=self.play_chime, args=(chime_name,), daemon=True)
+        t.start()
+
     def close(self):
         if self._pa:
             self._pa.terminate()

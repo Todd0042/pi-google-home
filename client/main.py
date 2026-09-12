@@ -27,10 +27,10 @@ CHUNK_SIZE = 1280  # 80ms chunks for wake word
 STREAM_CHUNK = 1024
 DEFAULT_SERVER_URL = "ws://192.168.1.236:8765/ws/assistant"
 WAKE_KEYWORD = "hey_jarvis"
-WAKE_THRESHOLD = 0.40
+WAKE_THRESHOLD = 0.25
 SPEECH_RMS = 120.0
 POST_SPEECH_SILENCE_SEC = 1.2
-MAX_RECORDING_SEC = 6.0
+MAX_RECORDING_SEC = 4.5
 
 def calculate_rms(data: np.ndarray) -> float:
     if len(data) == 0:
@@ -44,6 +44,7 @@ class AssistantClient:
         self.player = AudioPlayer()
         self.pa = pyaudio.PyAudio()
         self.ambient_rms = 70.0  # Rolling baseline of room noise floor
+        self.transport = AssistantClientTransport(self.server_url)
 
         # Ensure hardware AGC is disabled for high-fidelity wake-word neural inference
         os.system("amixer -c 0 sset 'Auto Gain Control' off >/dev/null 2>&1")
@@ -57,6 +58,15 @@ class AssistantClient:
         print(f"==> Assistant Client Ready! Target Wake Word: '{self.active_model}'")
         print(f"==> Host Server: {self.server_url}")
 
+    async def ensure_transport(self):
+        """Maintains an active, pre-warmed persistent connection to the host server."""
+        if not self.transport.ws or self.transport.ws.closed:
+            try:
+                await self.transport.connect()
+                print("[CONNECTED] Persistent link to host PC server ready.")
+            except Exception as e:
+                print(f"[WARN] Connection to {self.server_url} pending: {e}")
+
     async def record_and_stream(self, transport: AssistantClientTransport, mic_stream, baseline_ambient: float) -> None:
         """Records voice command until end-of-speech silence is detected, streaming to server."""
         print("\n[LISTENING] >>> Listening for your voice query... <<<", flush=True)
@@ -67,9 +77,10 @@ class AssistantClient:
 
         # Calibrate directly from the continuous room noise baseline captured BEFORE keyword
         ambient_rms = max(30.0, baseline_ambient)
-        speech_threshold = max(180.0, ambient_rms * 1.8)
-        silence_threshold = max(ambient_rms * 1.25, ambient_rms + 25.0)
-        post_speech_silence_sec = 0.65  # 650ms snappy silence cutoff
+        speech_threshold = ambient_rms + 14.0
+        silence_threshold = ambient_rms + 6.0
+        post_speech_silence_sec = 0.50  # 500ms snappy silence cutoff
+        MAX_RECORDING_SEC = 4.5  # Max 4.5s duration
 
         while True:
             raw = mic_stream.read(STREAM_CHUNK, exception_on_overflow=False)
@@ -89,7 +100,6 @@ class AssistantClient:
                 peak_rms = max(peak_rms, rms)
                 silence_start_time = None
             elif speech_started:
-                # Dynamic silence: dropped below ambient silence threshold or 25% of speech peak
                 dynamic_cutoff = max(silence_threshold, peak_rms * 0.25)
                 if rms <= dynamic_cutoff:
                     if silence_start_time is None:
@@ -99,12 +109,16 @@ class AssistantClient:
                         break
                 else:
                     silence_start_time = None
+            elif now - record_start_time >= 1.2 and not speech_started:
+                # After 1.2s of recording, treat user as having spoken so silence cutoff can engage
+                speech_started = True
+                silence_start_time = now
 
             if now - record_start_time >= MAX_RECORDING_SEC:
                 print("\n[TIMEOUT] Max recording duration reached.")
                 break
 
-            await asyncio.sleep(0.001)
+            await asyncio.sleep(0.0005)
 
         await transport.send_event("speech_end")
 
@@ -119,7 +133,10 @@ class AssistantClient:
 
     async def handle_turn(self, mic_stream, baseline_ambient: float):
         """Executes a full interactive assistant turn with progressive streaming playback."""
-        # 1. Play activation chime on monitor speakers
+        # 1. Ensure connection is active
+        await self.ensure_transport()
+
+        # 2. Play activation chime on monitor speakers
         try:
             self.player.play_chime("wake.wav")
         except Exception as e:
@@ -128,14 +145,11 @@ class AssistantClient:
         # Drain chime audio from mic buffer before recording user speech
         self._flush_mic_buffer(mic_stream)
 
-        # 2. Connect to Host PC Server
-        transport = AssistantClientTransport(self.server_url)
         try:
-            await transport.connect()
-            await transport.send_event("wake_triggered")
+            await self.transport.send_event("wake_triggered")
 
-            # 3. Stream user query with pre-calibrated ambient floor
-            await self.record_and_stream(transport, mic_stream, baseline_ambient=baseline_ambient)
+            # 3. Stream user query immediately with pre-calibrated ambient floor
+            await self.record_and_stream(self.transport, mic_stream, baseline_ambient=baseline_ambient)
 
             # 4. Await response from server & stream audio playback progressively in RAM
             print("[THINKING] Waiting for server transcription & response...")
@@ -150,7 +164,7 @@ class AssistantClient:
                 print(f"[SPEAKING] Streaming voice playback ({len(audio_bytes)} bytes) in memory...")
                 self.player.play_wav_bytes(audio_bytes)
 
-            await transport.receive_response(
+            await self.transport.receive_response(
                 on_transcription=on_transcription,
                 on_reply=on_reply,
                 on_audio_chunk=on_audio_chunk,
@@ -162,10 +176,13 @@ class AssistantClient:
                 self.player.play_chime("cancel.wav")
             except Exception:
                 pass
+            try:
+                await self.transport.close()
+            except Exception:
+                pass
         finally:
-            await transport.close()
             # Post-turn cleanup: Drain speaker echo from mic buffer and reset neural net history
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
             self._flush_mic_buffer(mic_stream)
             self.oww_model.reset()
 
@@ -184,6 +201,10 @@ class AssistantClient:
         print(" Press Ctrl+C to quit.")
         print("=" * 65)
 
+        # Pre-warm connection to server so wake turns have zero connection latency
+        await self.ensure_transport()
+
+        loop_counter = 0
         try:
             while True:
                 # Read 80ms chunk for wake word
@@ -198,6 +219,11 @@ class AssistantClient:
                 # Continuously feed audio into neural model to maintain temporal embedding context
                 predictions = self.oww_model.predict(audio_data)
                 score = predictions.get(self.active_model, 0.0)
+
+                # Periodic heartbeat log so we can see actual mic levels in journalctl
+                loop_counter += 1
+                if loop_counter % 35 == 0:
+                    print(f"[MIC TICK] RMS: {rms:5.1f} | Ambient Floor: {self.ambient_rms:5.1f} | Jarvis Score: {score:.4f}", flush=True)
 
                 # Diagnostic log whenever audio resembles wake word features
                 if score >= 0.15:

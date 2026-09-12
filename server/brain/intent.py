@@ -50,7 +50,10 @@ class IntentEngine:
             return "I am your Raspberry Pi smart assistant, running Arch Linux ARM."
 
         # 2. Weather Intent (Powered by Gemini with Live Multi-Day Open-Meteo Forecast)
-        weather_keywords = ["weather", "temperature", "forecast", "how hot", "how cold", "rain", "umbrella", "jacket", "windy", "sunny"]
+        weather_keywords = [
+            "weather", "temperature", "forecast", "how hot", "how cold", "rain",
+            "umbrella", "jacket", "windy", "sunny", "out there", "outside", "how's it look"
+        ]
         if any(w in clean for w in weather_keywords):
             city = None
             m = re.search(r'(?:in|for)\s+([a-zA-Z\s]+)', clean)
@@ -70,7 +73,7 @@ class IntentEngine:
                         model=os.getenv("GEMINI_MODEL", "gemini-3.6-flash"),
                         contents=weather_prompt,
                         config={
-                            "system_instruction": "You are a fast, voice-first smart home assistant. Answer directly in 1 short spoken sentence based on the provided live weather data. No markdown, asterisks, or disclaimers."
+                            "system_instruction": "You are a fast, voice-first smart home assistant in Jacksonville, Florida. Answer directly in 1 short spoken sentence based on the provided live weather data. No markdown, asterisks, or disclaimers."
                         },
                     )
                     text = response.text.strip()
@@ -85,7 +88,7 @@ class IntentEngine:
         if self._gemini_client:
             try:
                 system_prompt = (
-                    "You are a fast, voice-first smart home assistant. "
+                    "You are a fast, voice-first smart home assistant. The user is located in Jacksonville, Florida. "
                     "Be extremely direct, simple, and concise. "
                     "Provide a simple, clear 1-sentence answer for general questions or facts. "
                     "Do not give unsolicited background, lengthy safety disclaimers, or multi-paragraph context unless the user specifically asks you to 'explain', 'elaborate', or 'give details'. "
