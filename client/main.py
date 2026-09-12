@@ -27,7 +27,7 @@ CHUNK_SIZE = 1280  # 80ms chunks for wake word
 STREAM_CHUNK = 1024
 DEFAULT_SERVER_URL = "ws://192.168.1.236:8765/ws/assistant"
 WAKE_KEYWORD = "hey_jarvis"
-WAKE_THRESHOLD = 0.25
+WAKE_THRESHOLD = 0.20
 SPEECH_RMS = 120.0
 POST_SPEECH_SILENCE_SEC = 1.2
 MAX_RECORDING_SEC = 4.5
@@ -187,6 +187,7 @@ class AssistantClient:
             self.oww_model.reset()
 
     async def run(self):
+        # Capture through ALSA default, which asound.conf routes to hw:MICROPHONE,0
         mic_stream = self.pa.open(
             format=pyaudio.paInt16,
             channels=1,
