@@ -62,6 +62,11 @@ class AssistantClient:
         silence_start_time = None
         record_start_time = time.time()
 
+        # Dynamic VAD thresholds
+        speech_threshold = 300.0
+        silence_threshold = 180.0
+        post_speech_silence_sec = 0.9
+
         while True:
             raw = mic_stream.read(STREAM_CHUNK, exception_on_overflow=False)
             await transport.stream_audio_chunk(raw)
@@ -74,16 +79,20 @@ class AssistantClient:
             print(f"\rRecording: [{bars:<30}] (RMS: {rms:5.1f})", end="", flush=True)
 
             now = time.time()
-            if rms > SPEECH_RMS:
+            if rms > speech_threshold:
                 if not speech_started:
                     speech_started = True
                 silence_start_time = None
             elif speech_started:
-                if silence_start_time is None:
-                    silence_start_time = now
-                elif now - silence_start_time >= POST_SPEECH_SILENCE_SEC:
-                    print("\n[VAD] End of speech detected (silence threshold reached).")
-                    break
+                if rms < silence_threshold:
+                    if silence_start_time is None:
+                        silence_start_time = now
+                    elif now - silence_start_time >= post_speech_silence_sec:
+                        print(f"\n[VAD] End of speech detected ({post_speech_silence_sec}s silence).")
+                        break
+                else:
+                    # In between words
+                    silence_start_time = None
 
             if now - record_start_time >= MAX_RECORDING_SEC:
                 print("\n[TIMEOUT] Max recording duration reached.")
@@ -93,6 +102,15 @@ class AssistantClient:
 
         await transport.send_event("speech_end")
 
+    def _flush_mic_buffer(self, mic_stream):
+        """Drains any queued audio in the PyAudio buffer recorded during playback."""
+        try:
+            available = mic_stream.get_read_available()
+            if available > 0:
+                mic_stream.read(available, exception_on_overflow=False)
+        except Exception:
+            pass
+
     async def handle_turn(self, mic_stream):
         """Executes a full interactive assistant turn."""
         # 1. Play activation chime on monitor speakers
@@ -100,6 +118,9 @@ class AssistantClient:
             self.player.play_chime("wake.wav")
         except Exception as e:
             print(f"[WARN] Chime playback error: {e}")
+
+        # Drain chime audio from mic buffer before recording user speech
+        self._flush_mic_buffer(mic_stream)
 
         # 2. Connect to Host PC Server
         transport = AssistantClientTransport(self.server_url)
@@ -144,6 +165,10 @@ class AssistantClient:
                 pass
         finally:
             await transport.close()
+            # Post-turn cleanup: Drain speaker echo from mic buffer and reset neural net history
+            await asyncio.sleep(0.5)
+            self._flush_mic_buffer(mic_stream)
+            self.oww_model.reset()
 
     async def run(self):
         mic_stream = self.pa.open(
@@ -183,6 +208,8 @@ class AssistantClient:
                     print(f" [WAKE TRIGGERED] Score: {score:.3f}")
                     print(f"{'*' * 60}")
                     await self.handle_turn(mic_stream)
+                    self._flush_mic_buffer(mic_stream)
+                    self.oww_model.reset()
                     print("\n[READY] Listening for 'Hey Jarvis' again...\n")
 
                 await asyncio.sleep(0.005)
