@@ -25,9 +25,31 @@ All changes below were made and deployed this session. The Pi (client + display)
 - The block auto-clears at the next calendar day.
 - **Note**: this file is runtime state; `server/brain/.gemini_quota_block` is gitignored.
 
+## 5. Output volume pegged to maximum — Pi ALSA
+- HDMI speaker sink is ALSA card `vc4hdmi`. Verifed `PCM` control at `255/255 [100%] [0.00dB]` and re-applied `amixer -c 1 sset PCM 100%`.
+- The 78% mixer found earlier belongs to the *unused* headphone jack (`bcm2835` card 0), not the HDMI monitor.
+
+## 6. Local voice commands — `shared/protocol.py`, `server/brain/intent.py`, `server/api/gateway.py`, `client/main.py`, `client/network/client_transport.py`, `client/display/pygame_display.py`
+- New `command` WebSocket event type: server detects a device command in the transcript, sends a `command` payload to the Pi client, then streams a voiced confirmation through the normal TTS path.
+- Commands parse in `IntentEngine.process_stream()` (before weather/LLM) via `_match_system_command()`:
+  - `reboot` / `restart` → client runs `sudo systemctl reboot` (delayed ~5s so the confirmation finishes) — **inactive until passwordless sudo is added** on the Pi.
+  - `volume up` / `volume down` → client runs `amixer -c 1 sset PCM 5%+` / `5%-`.
+  - `set volume to XX` → `amixer -c 1 sset PCM XX%` (clamped 0-100; numbers spoken as words via `_int_to_words`).
+  - `display off` / `display on` → smart-display blanks/restores its own KMSDRM output (no `vcgencmd` under mainline KMS).
+- `process()` now filters out command dicts; confirmation sentences are spoken like any reply.
+- `scripts/run_server.sh` now launches Python with `-u` so server logs are unbuffered.
+
+## 7. Verified end-to-end (live pipeline: Piper speech → WS → Whisper → intent → command → confirmation)
+- `tests` extended via `test_commands_e2e.py`: **5/5** command flows pass (`display off/on`, `volume up/down`, `set volume to 45`); STT confidence 1.00.
+- Caught & fixed a real bug during testing: the gateway drainer assumed all queue items were 3-tuples while command items were 2-tuples — command events crashed the handler. Commands now enqueue as uniform 3-tuples.
+- Pi smart-display journal confirms `[EVENT] Display OFF/ON via voice command`.
+
 ## Deployment status
 | Target | Change | Restarted |
 |---|---|---|
 | Pi client | #1 | `assistant-client` restart |
 | Pi display | #2 | `smart-display` restart |
 | Host server | #3, #4 | gateway relaunched (PID confirmed listening on 8765) |
+| Pi client | #6 | `assistant-client` restart (NRestarts=0) |
+| Pi display | #6 | `smart-display` restart (NRestarts=0) |
+| Host server | #6, #7 | gateway relaunched via `scripts/run_server.sh` (unbuffered) |

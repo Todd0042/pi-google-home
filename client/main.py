@@ -11,6 +11,7 @@ import time
 import math
 import asyncio
 import argparse
+import subprocess
 import numpy as np
 import pyaudio
 
@@ -164,10 +165,14 @@ class AssistantClient:
                 print(f"[SPEAKING] Streaming voice playback ({len(audio_bytes)} bytes) in memory...")
                 self.player.play_wav_bytes(audio_bytes)
 
+            def on_command(cmd: dict):
+                self._execute_system_command(cmd)
+
             await self.transport.receive_response(
                 on_transcription=on_transcription,
                 on_reply=on_reply,
                 on_audio_chunk=on_audio_chunk,
+                on_command=on_command,
             )
 
         except Exception as e:
@@ -185,6 +190,22 @@ class AssistantClient:
             await asyncio.sleep(0.3)
             self._flush_mic_buffer(mic_stream)
             self.oww_model.reset()
+
+    def _execute_system_command(self, cmd: dict):
+        """Executes a local Pi action requested by the server (volume, reboot, display)."""
+        action = cmd.get("action", "")
+        print(f"[COMMAND] Executing local action: {action} {cmd.get('value', '')}", flush=True)
+
+        if action == "volume_delta":
+            delta = max(1, min(100, abs(int(cmd.get("value", 5)))))
+            os.system(f"amixer -c 1 sset PCM {delta}%{'+' if cmd.get('value', 5) >= 0 else '-'} >/dev/null 2>&1")
+        elif action == "volume_set":
+            level = max(0, min(100, int(cmd.get("value", 50))))
+            os.system(f"amixer -c 1 sset PCM {level}% >/dev/null 2>&1")
+        elif action in ("display_off", "display_on"):
+            print("[COMMAND] Display handled by smart-display process (skipping).", flush=True)
+        elif action == "reboot":
+            subprocess.Popen(["sh", "-c", "sleep 5 && sudo systemctl reboot"])
 
     async def run(self):
         # Capture through ALSA default, which asound.conf routes to hw:MICROPHONE,0

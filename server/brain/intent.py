@@ -10,7 +10,7 @@ import time
 import json
 import datetime
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Union, Dict
 from dotenv import load_dotenv
 from server.integrations.weather import get_weather, get_weather_context
 from server.integrations.web_search import search_web, clean_speech_text
@@ -24,6 +24,19 @@ _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 # Persisted marker of the date Gemini hit its daily quota. Written once, checked
 # on every query, cleared automatically the next calendar day.
 QUOTA_BLOCK_FILE = Path(__file__).parent / ".gemini_quota_block"
+
+def _int_to_words(n: int) -> str:
+    """Converts 0-100 into spoken words (e.g. 37 -> 'thirty-seven') for crisp TTS."""
+    ones = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+            "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+            "seventeen", "eighteen", "nineteen"]
+    tens = ["twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
+    if n < 20:
+        return ones[n]
+    if n == 100:
+        return "one hundred"
+    t, u = divmod(n, 10)
+    return tens[t - 2] if u == 0 else f"{tens[t - 2]}-{ones[u]}"
 
 load_dotenv()
 
@@ -48,20 +61,32 @@ class IntentEngine:
         """
         Processes a transcribed voice query and returns a conversational response string.
         """
-        return " ".join(self.process_stream(query))
+        parts = [p for p in self.process_stream(query) if isinstance(p, str)]
+        return " ".join(parts)
 
-    def process_stream(self, query: str) -> Iterator[str]:
+    def process_stream(self, query: str) -> Iterator[Union[str, Dict]]:
         """
         Processes a query and yields reply sentences progressively as they become
         available. For LLM answers this streams from Gemini so TTS can begin on
         sentence one while the model finishes the rest of the reply.
+
+        Local device commands yield a dict `{"command": ...}` (executed on the Pi)
+        followed by a spoken confirmation sentence.
         """
         clean = query.strip().lower()
         if not clean:
             yield "I'm listening, how can I help?"
             return
 
-        # 1. Fast Local Time & Date Intents
+        # 1. System Command Intents (executed locally on the Pi)
+        command_match = self._match_system_command(clean)
+        if command_match:
+            command_dict, confirmation = command_match
+            yield {"command": command_dict}
+            yield confirmation
+            return
+
+        # 2. Fast Local Time & Date Intents
         if any(w in clean for w in ["what time", "current time", "time is it"]):
             now = datetime.datetime.now().strftime("%I:%M %p")
             yield f"It is currently {now}."
@@ -178,6 +203,37 @@ class IntentEngine:
         except Exception:
             pass
         print("[QUOTA] Gemini daily quota hit. Blocking LLM calls until tomorrow.")
+
+    def _match_system_command(self, clean: str):
+        """Detects local Pi device commands. Returns (command_dict, spoken_confirmation) or None."""
+        # Set volume to a specific percentage ("set volume to 50", "volume at 75 percent", "volume 30")
+        m = re.search(r"set (?:the )?volume to (\d{1,3})", clean)
+        if not m:
+            m = re.search(r"volume (?:to|at) (\d{1,3})", clean)
+        if not m:
+            m = re.search(r"volume\s+(\d{1,3})\s*$", clean)
+        if m:
+            value = max(0, min(100, int(m.group(1))))
+            return ({"action": "volume_set", "value": value},
+                    f"Volume set to {_int_to_words(value)} percent.")
+
+        # Volume up / down by 5%
+        if re.search(r"volume up|turn (?:the )?volume up|increase (?:the )?volume|\blouder\b", clean):
+            return ({"action": "volume_delta", "value": 5}, "Volume up five percent.")
+        if re.search(r"volume down|turn (?:the )?volume down|decrease (?:the )?volume|lower (?:the )?volume|\bquieter\b", clean):
+            return ({"action": "volume_delta", "value": -5}, "Volume down five percent.")
+
+        # Reboot the Pi
+        if re.search(r"\b(reboot|restart)\b", clean):
+            return ({"action": "reboot"}, "Rebooting the Raspberry Pi now.")
+
+        # Display off / on
+        if re.search(r"display off|screen off|turn off (?:the )?(?:display|screen)", clean):
+            return ({"action": "display_off"}, "Turning the display off.")
+        if re.search(r"turn (?:the )?(?:display|screen) on|display on|screen on", clean):
+            return ({"action": "display_on"}, "Turning the display on.")
+
+        return None
 
     def _stream_gemini(self, contents: str, system_instruction: str) -> str:
         """Streams a Gemini completion, falling back to a non-streaming call on error."""

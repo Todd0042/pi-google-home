@@ -10,6 +10,7 @@ import json
 import time
 import asyncio
 import threading
+import traceback
 from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -193,11 +194,16 @@ async def assistant_websocket_endpoint(websocket: WebSocket):
 
                     def produce_reply():
                         try:
-                            for sentence in brain_engine.process_stream(transcription):
-                                wav_bytes = tts_engine.synthesize(sentence)
-                                loop.call_soon_threadsafe(
-                                    results.put_nowait, ("audio", sentence, wav_bytes)
-                                )
+                            for item in brain_engine.process_stream(transcription):
+                                if isinstance(item, dict) and "command" in item:
+                                    loop.call_soon_threadsafe(
+                                        results.put_nowait, ("command", item["command"], None)
+                                    )
+                                else:
+                                    wav_bytes = tts_engine.synthesize(item)
+                                    loop.call_soon_threadsafe(
+                                        results.put_nowait, ("audio", item, wav_bytes)
+                                    )
                         except Exception as exc:
                             print(f"[ERROR] Reply producer: {exc}")
                         finally:
@@ -212,9 +218,17 @@ async def assistant_websocket_endpoint(websocket: WebSocket):
                     await broadcast_to_displays("state_change", {"state": "speaking"})
 
                     while True:
-                        kind, sentence, wav_bytes = await results.get()
+                        kind, payload, extra = await results.get()
                         if kind == "done":
                             break
+                        if kind == "command":
+                            print(f"[COMMAND] Sending local action to Pi: {payload}")
+                            await websocket.send_text(
+                                Message(type=EventType.COMMAND, payload=payload).to_json()
+                            )
+                            await broadcast_to_displays("command", payload)
+                            continue
+                        sentence, wav_bytes = payload, extra
                         print(f"[REPLY] \"{sentence}\"")
                         await broadcast_to_displays("assistant_reply", {"text": sentence})
                         await websocket.send_text(
@@ -238,6 +252,7 @@ async def assistant_websocket_endpoint(websocket: WebSocket):
         print(f"[CLIENT DISCONNECTED] Client {client_ip} closed connection.")
     except Exception as e:
         print(f"[ERROR] WebSocket error: {e}")
+        traceback.print_exc()
         try:
             await websocket.send_text(Message(type=EventType.ERROR, payload={"error": str(e)}).to_json())
         except Exception:

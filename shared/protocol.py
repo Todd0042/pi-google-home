@@ -40,4 +40,5 @@ class EventType:
     ASSISTANT_REPLY = "assistant_reply"     # Final response text + display payload
     TTS_START = "tts_start"                 # Audio playback beginning
     TTS_END = "tts_end"                     # Audio playback completed
+    COMMAND = "command"                     # Server -> Client local action (e.g. volume, reboot)
     ERROR = "error"                         # Error message

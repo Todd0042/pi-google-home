@@ -20,4 +20,4 @@ if [ -d "$NV_DIR" ]; then
 fi
 
 echo "==> Starting Pi Google Home Gateway Server on Host PC..."
-exec .venv-server/bin/python -m server.api.gateway
+exec .venv-server/bin/python -u -m server.api.gateway

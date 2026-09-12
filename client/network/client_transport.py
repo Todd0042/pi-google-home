@@ -46,10 +46,12 @@ class AssistantClientTransport:
         on_transcription: Optional[Callable[[str], None]] = None,
         on_reply: Optional[Callable[[str], None]] = None,
         on_audio_chunk: Optional[Callable[[bytes], None]] = None,
+        on_command: Optional[Callable[[dict], None]] = None,
     ) -> bytes:
         """
         Listens for server events until TTS audio is received and turn completes.
         Streams audio packets to on_audio_chunk as they arrive for low latency.
+        Invokes on_command when the server requests a local Pi action.
         Returns the synthesized response WAV bytes.
         """
         if not self.ws:
@@ -72,6 +74,8 @@ class AssistantClientTransport:
                     on_transcription(payload.get("text", ""))
                 elif event_type == "assistant_reply" and on_reply:
                     on_reply(payload.get("text", ""))
+                elif event_type == "command" and on_command:
+                    on_command(payload)
                 elif event_type == "state_change" and payload.get("state") == "IDLE":
                     break
 

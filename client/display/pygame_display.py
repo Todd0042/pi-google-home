@@ -116,6 +116,7 @@ class SmartDisplayApp:
         self.transcription = ""
         self.assistant_reply = ""
         self.last_speech_time = 0.0
+        self.screen_active = True
 
         # Weather Cache
         self.weather_data = None
@@ -228,6 +229,15 @@ class SmartDisplayApp:
                             self.assistant_reply = str(payload.get("text", "")).strip()
                             self.last_speech_time = time.time()
                             print(f"[EVENT] Assistant Reply: \"{self.assistant_reply}\"", flush=True)
+
+                        elif msg_type == "command":
+                            action = str(payload.get("action", ""))
+                            if action == "display_off":
+                                self.screen_active = False
+                                print("[EVENT] Display OFF via voice command", flush=True)
+                            elif action == "display_on":
+                                self.screen_active = True
+                                print("[EVENT] Display ON via voice command", flush=True)
 
                         elif msg_type == "weather_update":
                             self.weather_data = payload
@@ -635,6 +645,15 @@ class SmartDisplayApp:
 
             # Clear background
             self.screen.fill(BG_COLOR)
+
+            if not self.screen_active:
+                # Display is off: render a blank frame only (no UI work, low CPU)
+                pygame.display.flip()
+                elapsed = time.perf_counter() - start_t
+                sleep_sec = frame_time - elapsed
+                if sleep_sec > 0:
+                    time.sleep(sleep_sec)
+                continue
 
             # Draw UI components
             self.draw_header_section()
