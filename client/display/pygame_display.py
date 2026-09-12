@@ -10,11 +10,17 @@ import sys
 import time
 import json
 import math
+import signal
 import asyncio
 import threading
 import datetime
 import traceback
 import urllib.request
+
+# Default to direct DRM/KMS for maximum performance and zero compositor overhead
+if "SDL_VIDEODRIVER" not in os.environ:
+    os.environ["SDL_VIDEODRIVER"] = "kmsdrm"
+
 import pygame
 
 # Configuration
@@ -449,6 +455,12 @@ class SmartDisplayApp:
 
     def run(self):
         """Main rendering loop clocked at 30 FPS."""
+        def sig_handler(signum, frame):
+            self.running = False
+
+        signal.signal(signal.SIGTERM, sig_handler)
+        signal.signal(signal.SIGINT, sig_handler)
+
         print("[DISPLAY] Ultra-efficient display loop started at 30 FPS...", flush=True)
         while self.running:
             for event in pygame.event.get():

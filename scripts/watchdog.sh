@@ -30,9 +30,9 @@ while true; do
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WATCHDOG] smart-display is NOT active! Restarting..."
     systemctl --user restart smart-display
   else
-    # Verify that cage or start_kiosk.sh process is alive
-    if ! (pgrep -f "cage" >/dev/null 2>&1 || pgrep -f "start_kiosk.sh" >/dev/null 2>&1); then
-      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WATCHDOG] cage/kiosk process missing! Restarting smart-display..."
+    # Verify that pygame_display.py, cage, or start_kiosk.sh process is alive
+    if ! (pgrep -f "pygame_display.py" >/dev/null 2>&1 || pgrep -f "cage" >/dev/null 2>&1 || pgrep -f "start_kiosk.sh" >/dev/null 2>&1); then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WATCHDOG] display process missing! Restarting smart-display..."
       systemctl --user restart smart-display
     fi
   fi

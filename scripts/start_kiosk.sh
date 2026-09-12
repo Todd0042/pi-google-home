@@ -16,7 +16,7 @@ mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
 
 export LIBSEAT_BACKEND=seatd
-export WLR_LIBINPUT_NO_DEVICES=1
+export SDL_VIDEODRIVER=kmsdrm
 
 # Wait up to 30 seconds for network and host server to be reachable on boot
 echo "==> Verifying connection to host server at ${HEALTH_URL}..."
@@ -30,11 +30,11 @@ while [ $MAX_WAIT -gt 0 ]; do
   MAX_WAIT=$((MAX_WAIT - 1))
 done
 
-# Launch Cage with native Pygame smart display (~30MB RAM vs 300MB Chromium)
+# Launch native Pygame smart display via direct DRM/KMS (~30MB RAM vs 300MB Chromium)
 REPO_DIR="/home/alarm/pi-google-home"
 if [ ! -d "$REPO_DIR" ]; then
   REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 fi
 cd "$REPO_DIR"
 
-exec cage -- python -u client/display/pygame_display.py
+exec python -u client/display/pygame_display.py
