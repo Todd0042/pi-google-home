@@ -21,6 +21,9 @@ build/
 !.env.example
 *.env.local
 
+# Runtime state
+server/brain/.gemini_quota_block
+
 # Model weights
 *.onnx
 *.tflite

@@ -6,11 +6,24 @@ or performs real-time web research and LLM reasoning.
 
 import os
 import re
+import time
+import json
 import datetime
-from typing import Optional
+from pathlib import Path
+from typing import Iterator, Optional
 from dotenv import load_dotenv
 from server.integrations.weather import get_weather, get_weather_context
 from server.integrations.web_search import search_web, clean_speech_text
+
+# Streaming reply tuning: cap generation so the model stops right after the
+# one-sentence spoken answer instead of producing extra padding.
+MAX_OUTPUT_TOKENS = 128
+TEMPERATURE = 0.2
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
+
+# Persisted marker of the date Gemini hit its daily quota. Written once, checked
+# on every query, cleared automatically the next calendar day.
+QUOTA_BLOCK_FILE = Path(__file__).parent / ".gemini_quota_block"
 
 load_dotenv()
 
@@ -18,12 +31,14 @@ class IntentEngine:
     def __init__(self, gemini_api_key: Optional[str] = None):
         self.gemini_api_key = gemini_api_key or os.getenv("GEMINI_API_KEY")
         self._gemini_client = None
+        self._quota_blocked_today = False
 
         if self.gemini_api_key:
             try:
                 from google import genai
                 self._gemini_client = genai.Client(api_key=self.gemini_api_key)
                 print("==> Gemini Reasoning Engine connected with Google Search Grounding.")
+                self._load_quota_state()
             except Exception as e:
                 print(f"[WARN] Failed to initialize Gemini client: {e}")
         else:
@@ -33,21 +48,33 @@ class IntentEngine:
         """
         Processes a transcribed voice query and returns a conversational response string.
         """
+        return " ".join(self.process_stream(query))
+
+    def process_stream(self, query: str) -> Iterator[str]:
+        """
+        Processes a query and yields reply sentences progressively as they become
+        available. For LLM answers this streams from Gemini so TTS can begin on
+        sentence one while the model finishes the rest of the reply.
+        """
         clean = query.strip().lower()
         if not clean:
-            return "I'm listening, how can I help?"
+            yield "I'm listening, how can I help?"
+            return
 
         # 1. Fast Local Time & Date Intents
         if any(w in clean for w in ["what time", "current time", "time is it"]):
             now = datetime.datetime.now().strftime("%I:%M %p")
-            return f"It is currently {now}."
+            yield f"It is currently {now}."
+            return
 
         if any(w in clean for w in ["what day", "what date", "today's date"]):
             today = datetime.datetime.now().strftime("%A, %B %d, %Y")
-            return f"Today is {today}."
+            yield f"Today is {today}."
+            return
 
         if "who are you" in clean or "what is your name" in clean:
-            return "I am your Raspberry Pi smart assistant, running Arch Linux ARM."
+            yield "I am your Raspberry Pi smart assistant, running Arch Linux ARM."
+            return
 
         # 2. Weather Intent (Powered by Gemini with Live Multi-Day Open-Meteo Forecast)
         weather_keywords = [
@@ -60,32 +87,35 @@ class IntentEngine:
             if m:
                 city = m.group(1).replace("today", "").replace("tomorrow", "").strip()
 
-            if self._gemini_client:
-                weather_ctx = get_weather_context(city)
-                weather_prompt = (
-                    f"User Question: {query}\n\n"
-                    f"Live Multi-Day Weather Data:\n{weather_ctx}\n\n"
-                    "Using the live weather data above, answer the user's specific question (e.g. for today, tomorrow, or a specific day) "
-                    "directly in 1 concise spoken sentence without markdown, asterisks, or disclaimers."
-                )
+            if self._gemini_available():
                 try:
-                    response = self._gemini_client.models.generate_content(
-                        model=os.getenv("GEMINI_MODEL", "gemini-3.6-flash"),
-                        contents=weather_prompt,
-                        config={
-                            "system_instruction": "You are a fast, voice-first smart home assistant in Jacksonville, Florida. Answer directly in 1 short spoken sentence based on the provided live weather data. No markdown, asterisks, or disclaimers."
-                        },
+                    weather_ctx = get_weather_context(city)
+                    weather_prompt = (
+                        f"User Question: {query}\n\n"
+                        f"Live Multi-Day Weather Data:\n{weather_ctx}\n\n"
+                        "Using the live weather data above, answer the user's specific question (e.g. for today, tomorrow, or a specific day) "
+                        "directly in 1 concise spoken sentence without markdown, asterisks, or disclaimers."
                     )
-                    text = response.text.strip()
-                    return clean_speech_text(text)
+                    system_instruction = (
+                        "You are a fast, voice-first smart home assistant in Jacksonville, Florida. "
+                        "Answer directly in 1 short spoken sentence based on the provided live weather data. "
+                        "No markdown, asterisks, or disclaimers."
+                    )
+                    text = clean_speech_text(self._stream_gemini(
+                        contents=weather_prompt,
+                        system_instruction=system_instruction,
+                    ))
+                    yield from self._yield_sentences(text)
+                    return
                 except Exception as e:
                     print(f"[WARN] Gemini weather reasoning failed ({e}), falling back to local weather...")
 
             # Fallback to local deterministic weather if Gemini is unavailable
-            return get_weather(city, query=clean)
+            yield get_weather(city, query=clean)
+            return
 
         # 3. Gemini LLM Reasoning (Super-fast conversational intelligence)
-        if self._gemini_client:
+        if self._gemini_available():
             try:
                 system_prompt = (
                     "You are a fast, voice-first smart home assistant. The user is located in Jacksonville, Florida. "
@@ -94,7 +124,6 @@ class IntentEngine:
                     "Do not give unsolicited background, lengthy safety disclaimers, or multi-paragraph context unless the user specifically asks you to 'explain', 'elaborate', or 'give details'. "
                     "Never use markdown, bullet points, asterisks, or citations."
                 )
-                model_to_use = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
                 # If query needs external web search or latest info
                 context = ""
@@ -104,20 +133,12 @@ class IntentEngine:
                         context = f"\nRelevant web search data: {search_res}"
 
                 prompt = f"{clean}{context}"
-                try:
-                    response = self._gemini_client.models.generate_content(
-                        model=model_to_use,
-                        contents=prompt,
-                        config={"system_instruction": system_prompt},
-                    )
-                except Exception:
-                    response = self._gemini_client.models.generate_content(
-                        model="gemini-flash-latest",
-                        contents=prompt,
-                        config={"system_instruction": system_prompt},
-                    )
-                text = response.text.strip()
-                return clean_speech_text(text)
+                text = clean_speech_text(self._stream_gemini(
+                    contents=prompt,
+                    system_instruction=system_prompt,
+                ))
+                yield from self._yield_sentences(text)
+                return
             except Exception as e:
                 print(f"[WARN] Gemini reasoning failed ({e}), falling back to web search...")
 
@@ -125,9 +146,100 @@ class IntentEngine:
         print(f"[RESEARCH] Querying web search for: '{query}'...")
         web_answer = search_web(query)
         if web_answer and len(web_answer) > 10:
-            return clean_speech_text(web_answer)
+            yield clean_speech_text(web_answer)
+            return
 
-        return f"I couldn't find a definitive answer for {query}."
+        yield f"I couldn't find a definitive answer for {query}."
+
+    def _load_quota_state(self):
+        """Loads yesterday/today quota-block marker from disk, clearing stale entries."""
+        try:
+            if QUOTA_BLOCK_FILE.exists():
+                raw = QUOTA_BLOCK_FILE.read_text().strip()
+                if raw == datetime.date.today().isoformat():
+                    self._quota_blocked_today = True
+                    print("[QUOTA] Gemini daily quota exhausted; using local fallbacks until tomorrow.")
+                else:
+                    QUOTA_BLOCK_FILE.unlink()
+        except Exception:
+            pass
+
+    def _gemini_available(self) -> bool:
+        """True only if the Gemini client exists and today's quota is not already known-exhausted."""
+        if not self._gemini_client or self._quota_blocked_today:
+            return False
+        return True
+
+    def _block_quota(self):
+        """Remembers that today's Gemini quota is exhausted so no API calls are attempted again today."""
+        self._quota_blocked_today = True
+        try:
+            QUOTA_BLOCK_FILE.write_text(datetime.date.today().isoformat())
+        except Exception:
+            pass
+        print("[QUOTA] Gemini daily quota hit. Blocking LLM calls until tomorrow.")
+
+    def _stream_gemini(self, contents: str, system_instruction: str) -> str:
+        """Streams a Gemini completion, falling back to a non-streaming call on error."""
+        config = {
+            "system_instruction": system_instruction,
+            "max_output_tokens": MAX_OUTPUT_TOKENS,
+            "temperature": TEMPERATURE,
+        }
+        model_to_use = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+        try:
+            return self._consume_stream(
+                self._gemini_client.models.generate_content_stream(
+                    model=model_to_use,
+                    contents=contents,
+                    config=config,
+                )
+            )
+        except Exception as e:
+            # Quota / rate-limit (429): remember it for the rest of the day and
+            # bail to the local fallback instead of burning another call.
+            try:
+                from google.genai import errors as genai_errors
+                if isinstance(e, genai_errors.APIError) and getattr(e, "code", None) == 429:
+                    self._block_quota()
+                    raise
+            except Exception:
+                pass
+            print(f"[WARN] Gemini streaming failed ({e}), retrying non-streaming...")
+            return self._gemini_client.models.generate_content(
+                model=model_to_use,
+                contents=contents,
+                config=config,
+            ).text.strip()
+
+    def _consume_stream(self, stream) -> str:
+        """Accumulates text from a streamed Gemini response."""
+        t0 = time.perf_counter()
+        parts = []
+        for chunk in stream:
+            if chunk.text:
+                parts.append(chunk.text)
+        text = "".join(parts).strip()
+        dt = (time.perf_counter() - t0) * 1000.0
+        print(f"[LLM] Gemini streamed reply in {dt:.0f}ms ({len(text)} chars)")
+        return text
+
+    def _yield_sentences(self, text: str) -> Iterator[str]:
+        """Yields complete sentences from text, draining any trailing partial."""
+        if not text:
+            yield "I couldn't find a definitive answer for that."
+            return
+        remainder = text
+        while True:
+            parts = _SENTENCE_BOUNDARY.split(remainder, maxsplit=1)
+            if len(parts) == 2:
+                yield parts[0].strip()
+                remainder = parts[1]
+            else:
+                tail = remainder.strip()
+                if tail:
+                    yield tail
+                return
 
 if __name__ == "__main__":
     engine = IntentEngine()

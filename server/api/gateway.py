@@ -7,8 +7,9 @@ GPU-accelerated STT (Whisper), LLM reasoning, and neural TTS synthesis (Piper).
 import os
 import sys
 import json
-import re
+import time
 import asyncio
+import threading
 from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -185,31 +186,37 @@ async def assistant_websocket_endpoint(websocket: WebSocket):
                         await broadcast_to_displays("state_change", {"state": "ready"})
                         continue
 
-                    # 2. Reasoning / Intent resolution (Local intents or LLM)
-                    reply_text = await loop.run_in_executor(
-                        None, brain_engine.process, transcription
-                    )
-                    print(f"[REPLY] \"{reply_text}\"")
-                    await websocket.send_text(
-                        Message(type=EventType.ASSISTANT_REPLY, payload={"text": reply_text}).to_json()
-                    )
-                    await broadcast_to_displays("assistant_reply", {"text": reply_text})
+                    # 2+3. Stream LLM reply sentences and overlap Piper TTS with
+                    # Gemini generation: each completed sentence is synthesized as
+                    # soon as it streams out and sent to the Pi immediately.
+                    results: asyncio.Queue = asyncio.Queue()
 
-                    # 3. Neural Voice Synthesis (Piper) - Progressive sentence streaming
+                    def produce_reply():
+                        try:
+                            for sentence in brain_engine.process_stream(transcription):
+                                wav_bytes = tts_engine.synthesize(sentence)
+                                loop.call_soon_threadsafe(
+                                    results.put_nowait, ("audio", sentence, wav_bytes)
+                                )
+                        except Exception as exc:
+                            print(f"[ERROR] Reply producer: {exc}")
+                        finally:
+                            loop.call_soon_threadsafe(results.put_nowait, ("done", None, None))
+
+                    threading.Thread(target=produce_reply, daemon=True).start()
+
                     current_state = AssistantState.SPEAKING
                     await websocket.send_text(
                         Message(type=EventType.STATE_CHANGE, payload={"state": AssistantState.SPEAKING}).to_json()
                     )
                     await broadcast_to_displays("state_change", {"state": "speaking"})
 
-                    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', reply_text) if s.strip()]
-                    if not sentences:
-                        sentences = [reply_text]
-
-                    for s in sentences:
-                        wav_bytes = await loop.run_in_executor(
-                            None, tts_engine.synthesize, s
-                        )
+                    while True:
+                        kind, sentence, wav_bytes = await results.get()
+                        if kind == "done":
+                            break
+                        print(f"[REPLY] \"{sentence}\"")
+                        await broadcast_to_displays("assistant_reply", {"text": sentence})
                         await websocket.send_text(
                             Message(type=EventType.TTS_START, payload={"size": len(wav_bytes), "format": "wav"}).to_json()
                         )
