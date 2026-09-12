@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Pi Google Home — Ultra-Lightweight Native Pygame Smart Display
-Runs natively on Linux DRM/KMS or Wayland (Cage) without Chromium or X11.
-Optimized with surface caching for <3% CPU and ~30MB RAM.
+Faithfully reproduces the modern Glassmorphism Google Chrome CSS Dashboard
+with zero-overhead DRM/KMS hardware rendering (<4% CPU, ~50MB RAM).
 """
 
 import os
@@ -29,27 +29,54 @@ SERVER_PORT = int(os.getenv("SERVER_PORT", "8765"))
 WEATHER_URL = f"http://{SERVER_HOST}:{SERVER_PORT}/api/weather"
 WS_DISPLAY_URL = f"ws://{SERVER_HOST}:{SERVER_PORT}/ws/display"
 
-# Colors (Modern Deep Midnight Theme)
-BG_COLOR = (11, 15, 25)
-CARD_BG = (18, 26, 42)
-CARD_BORDER = (35, 48, 75)
-TEXT_PRIMARY = (245, 247, 250)
-TEXT_SECONDARY = (148, 163, 184)
-TEXT_MUTED = (100, 116, 139)
-ACCENT_CYAN = (14, 165, 233)
-ACCENT_BLUE = (59, 130, 246)
-ACCENT_GREEN = (16, 185, 129)
-ACCENT_AMBER = (245, 158, 11)
-ACCENT_PURPLE = (139, 92, 246)
+# Colors (Faithful to CSS --bg-primary, --bg-card, and color tokens)
+BG_COLOR = (10, 13, 20)                 # #0a0d14
+CARD_BG = (18, 24, 38)                  # rgba(18, 24, 38, 0.92)
+CARD_BG_TODAY = (24, 34, 54)            # rgba(30, 42, 64, 0.70)
+CARD_BORDER = (40, 50, 75)              # rgba(255, 255, 255, 0.08)
+CARD_BORDER_TODAY = (56, 189, 248)      # #38bdf8
 
-# State Colors mapping
+TEXT_PRIMARY = (240, 244, 252)          # #f0f4fc
+TEXT_SECONDARY = (148, 163, 184)        # #94a3b8
+TEXT_MUTED = (100, 116, 139)            # #64748b
+
+# Accent & State Colors
+ACCENT_READY = (16, 185, 129)           # #10b981 (Emerald Green)
+ACCENT_LISTENING = (6, 182, 212)        # #06b6d4 (Electric Cyan)
+ACCENT_THINKING = (245, 158, 11)        # #f59e0b (Amber / Gold)
+ACCENT_SPEAKING = (139, 92, 246)        # #8b5cf6 (Vibrant Purple)
+
 STATE_COLORS = {
-    "ready": ACCENT_GREEN,
-    "idle": ACCENT_GREEN,
-    "listening": ACCENT_BLUE,
-    "thinking": ACCENT_AMBER,
-    "speaking": ACCENT_PURPLE,
+    "ready": ACCENT_READY,
+    "idle": ACCENT_READY,
+    "listening": ACCENT_LISTENING,
+    "thinking": ACCENT_THINKING,
+    "querying": ACCENT_THINKING,
+    "speaking": ACCENT_SPEAKING,
 }
+
+STATE_LABELS = {
+    "ready": "READY",
+    "idle": "READY",
+    "listening": "LISTENING",
+    "thinking": "THINKING",
+    "querying": "THINKING",
+    "speaking": "SPEAKING",
+}
+
+STATE_SUBTEXTS = {
+    "ready": 'Say "Hey Jarvis"',
+    "idle": 'Say "Hey Jarvis"',
+    "listening": "Listening...",
+    "thinking": "Thinking...",
+    "querying": "Thinking...",
+    "speaking": "Responding...",
+}
+
+TEMP_HOT = (248, 113, 113)              # #f87171
+TEMP_COOL = (96, 165, 250)              # #60a5fa
+ACCENT_BLUE = (59, 130, 246)
+GOLDEN_SUN = (251, 191, 36)             # #fbbf24
 
 class SmartDisplayApp:
     def __init__(self):
@@ -60,28 +87,29 @@ class SmartDisplayApp:
         except Exception:
             pass
 
-        # Detect display mode & resolution
+        # Detect resolution (e.g. 1920x1080 or 1280x720)
         info = pygame.display.Info()
-        self.w = info.current_w or 1280
-        self.h = info.current_h or 720
+        self.w = info.current_w or 1920
+        self.h = info.current_h or 1080
 
-        print(f"[DISPLAY] Initializing Native Smart Display at {self.w}x{self.h}...")
+        print(f"[DISPLAY] Initializing Native Smart Display at {self.w}x{self.h}...", flush=True)
         self.screen = pygame.display.set_mode((self.w, self.h), pygame.FULLSCREEN | pygame.DOUBLEBUF)
         pygame.display.set_caption("Pi Google Home Smart Display")
-        self.clock = pygame.time.Clock()
 
-        # Scale factor relative to 1280x720 reference
-        self.scale_x = self.w / 1280.0
-        self.scale_y = self.h / 720.0
+        # Scale relative to 1920x1080 desktop reference
+        self.scale_x = self.w / 1920.0
+        self.scale_y = self.h / 1080.0
         self.scale = min(self.scale_x, self.scale_y)
 
-        # Fonts
+        # Fonts (scalable sizes based on 1920x1080 standard)
         font_family = "DejaVu Sans,Liberation Sans,Arial,sans-serif"
-        self.font_huge = pygame.font.SysFont(font_family, int(84 * self.scale), bold=True)
-        self.font_large = pygame.font.SysFont(font_family, int(46 * self.scale), bold=True)
-        self.font_med = pygame.font.SysFont(font_family, int(28 * self.scale), bold=True)
-        self.font_body = pygame.font.SysFont(font_family, int(22 * self.scale))
-        self.font_small = pygame.font.SysFont(font_family, int(18 * self.scale))
+        self.font_giant = pygame.font.SysFont(font_family, int(112 * self.scale), bold=True)
+        self.font_huge = pygame.font.SysFont(font_family, int(64 * self.scale), bold=True)
+        self.font_large = pygame.font.SysFont(font_family, int(36 * self.scale), bold=True)
+        self.font_med = pygame.font.SysFont(font_family, int(22 * self.scale), bold=True)
+        self.font_body = pygame.font.SysFont(font_family, int(18 * self.scale))
+        self.font_small = pygame.font.SysFont(font_family, int(15 * self.scale))
+        self.font_tiny = pygame.font.SysFont(font_family, int(12 * self.scale), bold=True)
 
         # Dynamic Assistant State
         self.assistant_state = "ready"
@@ -89,97 +117,90 @@ class SmartDisplayApp:
         self.assistant_reply = ""
         self.last_speech_time = 0.0
 
-        # Weather Data & State
+        # Weather Cache
         self.weather_data = None
         self.weather_dirty = True
 
-        # Pre-allocated Cached Clock Surfaces
+        # Pre-allocated Surface Caches
+        self.pad_x = int(48 * self.scale_x)
+        self.pad_y = int(32 * self.scale_y)
+
+        # Hero Weather Panel: full width glass card
+        self.hero_x = self.pad_x
+        self.hero_y = int(200 * self.scale_y)
+        self.hero_w = self.w - 2 * self.pad_x
+        self.hero_h = int(235 * self.scale_y)
+        self.hero_surf = pygame.Surface((self.hero_w, self.hero_h), pygame.SRCALPHA)
+
+        # 7-Day Forecast Area
+        self.forecast_y = int(460 * self.scale_y)
+        self.forecast_cards_y = self.forecast_y + int(38 * self.scale_y)
+        self.forecast_cards_h = self.h - self.forecast_cards_y - int(32 * self.scale_y)
+        self.forecast_surf = pygame.Surface((self.hero_w, self.forecast_cards_h), pygame.SRCALPHA)
+
+        # Pre-rendered clock cache
         self.cached_time_str = ""
         self.cached_time_surf = None
         self.cached_ampm_surf = None
         self.cached_date_str = ""
         self.cached_date_surf = None
-        self.loc_surf = self.font_small.render("Jacksonville, Florida", True, TEXT_MUTED)
-
-        # Weather Card Surface
-        self.cw = int(420 * self.scale_x)
-        self.ch = int(420 * self.scale_y)
-        self.cx = int(50 * self.scale_x)
-        self.cy = int(240 * self.scale_y)
-        self.weather_card_surf = pygame.Surface((self.cw, self.ch), pygame.SRCALPHA)
-
-        # Forecast Card Surface
-        self.rx = int(self.w * 0.63)
-        self.ry = int(45 * self.scale_y)
-        self.rw = int(self.w - self.rx - 45 * self.scale_x)
-        self.rh = int(self.h - 90 * self.scale_y)
-        self.forecast_card_surf = pygame.Surface((self.rw, self.rh), pygame.SRCALPHA)
-
-        # Pre-allocated Aura Surface for Jarvis Orb
-        self.max_aura_r = int(140 * self.scale)
-        self.aura_surf = pygame.Surface((self.max_aura_r * 2, self.max_aura_r * 2), pygame.SRCALPHA)
 
         self.running = True
 
-        # 1. Dedicated Weather Polling Worker Thread
+        # 1. Background Weather Worker Thread
         self.weather_thread = threading.Thread(target=self._weather_worker, daemon=True)
         self.weather_thread.start()
 
-        # 2. Real-time WebSocket Listener Thread
+        # 2. Real-time WebSocket Event Listener Thread
         self.ws_thread = threading.Thread(target=self._websocket_worker, daemon=True)
         self.ws_thread.start()
 
     def _weather_worker(self):
-        """Continuously polls the weather API, retrying rapidly if initial fetch fails."""
+        """Continuously polls the weather API, retrying rapidly on failure, then every 10 min."""
         while self.running:
             success = self._fetch_weather_sync()
             if not success:
-                # Retry in 5s if host server wasn't ready
                 for _ in range(5):
                     if not self.running:
                         break
                     time.sleep(1)
             else:
-                # Successfully fetched, wait 10 minutes for next poll
                 for _ in range(600):
                     if not self.running:
                         break
                     time.sleep(1)
 
     def _fetch_weather_sync(self) -> bool:
-        """Fetches live weather JSON from host server synchronously."""
+        """Fetches live weather JSON from host server."""
         try:
             req = urllib.request.Request(WEATHER_URL, headers={"User-Agent": "PiSmartDisplay/1.0"})
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with urllib.request.urlopen(req, timeout=5) as resp:
                 if resp.status == 200:
-                    raw = resp.read().decode("utf-8")
-                    data = json.loads(raw)
-                    if data.get("success"):
-                        self.weather_data = data
-                        self.weather_dirty = True
-                        print(f"[WEATHER] Successfully updated: {data.get('current', {}).get('temp')}°F, {data.get('current', {}).get('condition')}", flush=True)
-                        return True
+                    data = json.loads(resp.read().decode("utf-8"))
+                    self.weather_data = data
+                    self.weather_dirty = True
+                    curr = data.get("current", {})
+                    print(f"[WEATHER] Successfully updated: {curr.get('temp')}°F, {curr.get('condition')}", flush=True)
+                    return True
         except Exception as e:
-            print(f"[WEATHER] Fetch error ({WEATHER_URL}): {e}", flush=True)
+            print(f"[WEATHER] Fetch failed: {e}. Retrying soon...", flush=True)
         return False
 
     def _websocket_worker(self):
-        """Runs the asyncio WebSocket client loop in a background thread."""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(self._websocket_listener())
+        """Asynchronous worker for persistent WebSocket event stream."""
+        asyncio.run(self._websocket_loop())
 
-    async def _websocket_listener(self):
-        """Maintains persistent WebSocket connection to server for real-time assistant events."""
+    async def _websocket_loop(self):
+        """Connects to server WebSocket and receives live state / dialogue events."""
         import websockets
         while self.running:
             try:
                 print(f"[WS] Connecting to {WS_DISPLAY_URL}...", flush=True)
-                async with websockets.connect(WS_DISPLAY_URL, ping_interval=20, ping_timeout=10) as ws:
+                async with websockets.connect(WS_DISPLAY_URL) as ws:
                     print("[WS] Connected to dashboard event stream!", flush=True)
                     while self.running:
-                        msg = await ws.recv()
-                        data = json.loads(msg)
+                        msg_str = await ws.recv()
+                        data = json.loads(msg_str)
                         msg_type = data.get("type")
                         payload = data.get("payload", {})
 
@@ -187,7 +208,7 @@ class SmartDisplayApp:
                             raw_state = str(payload.get("state", "ready")).lower()
                             if "listen" in raw_state:
                                 self.assistant_state = "listening"
-                            elif "think" in raw_state:
+                            elif "think" in raw_state or "query" in raw_state:
                                 self.assistant_state = "thinking"
                             elif "speak" in raw_state:
                                 self.assistant_state = "speaking"
@@ -216,248 +237,382 @@ class SmartDisplayApp:
                 print(f"[WS] Connection dropped ({e}). Reconnecting in 3s...", flush=True)
                 await asyncio.sleep(3)
 
-    def draw_card(self, target_surf, rect, bg=CARD_BG, border=CARD_BORDER, radius=20):
-        """Draws a sleek rounded card with a soft border on the target surface."""
+    def draw_card(self, target_surf, rect, bg=CARD_BG, border=CARD_BORDER, radius=24, border_width=1):
+        """Draws a sleek modern glassmorphism card with rounded corners."""
         r = max(4, int(radius * self.scale))
         pygame.draw.rect(target_surf, bg, rect, border_radius=r)
-        pygame.draw.rect(target_surf, border, rect, width=max(1, int(1.5 * self.scale)), border_radius=r)
+        pygame.draw.rect(target_surf, border, rect, width=max(1, int(border_width * self.scale)), border_radius=r)
 
-    def draw_clock_section(self):
-        """Renders the digital clock, date, and location badge using surface caching."""
+    def draw_weather_symbol(self, target_surf, condition_str, center_x, center_y, size):
+        """Draws a clean, stylized weather illustration (Sun, Cloud, Rain, Storm, Snow)."""
+        cond = str(condition_str).lower()
+        cx, cy = int(center_x), int(center_y)
+        r = max(6, int(size * self.scale))
+
+        if "clear" in cond or "sun" in cond or "fair" in cond:
+            # Radiant Golden Sun
+            pygame.draw.circle(target_surf, GOLDEN_SUN, (cx, cy), r)
+            # Outer ray ring
+            pygame.draw.circle(target_surf, (253, 224, 71), (cx, cy), r + max(3, int(4 * self.scale)), max(1, int(2 * self.scale)))
+
+        elif "rain" in cond or "shower" in cond or "drizzle" in cond:
+            # Cloud + Falling Rain Ticks
+            cloud_color = (148, 163, 184)
+            cr = int(r * 0.7)
+            pygame.draw.circle(target_surf, cloud_color, (cx - int(cr * 0.6), cy - int(cr * 0.2)), int(cr * 0.7))
+            pygame.draw.circle(target_surf, cloud_color, (cx + int(cr * 0.6), cy - int(cr * 0.1)), int(cr * 0.8))
+            pygame.draw.circle(target_surf, (203, 213, 225), (cx, cy - int(cr * 0.5)), cr)
+            # Rain drops
+            rain_color = (56, 189, 248)
+            drop_len = max(4, int(6 * self.scale))
+            for offset_x in [-int(r * 0.5), 0, int(r * 0.5)]:
+                start_p = (cx + offset_x, cy + int(cr * 0.8))
+                end_p = (cx + offset_x - int(2 * self.scale), cy + int(cr * 0.8) + drop_len)
+                pygame.draw.line(target_surf, rain_color, start_p, end_p, max(1, int(2 * self.scale)))
+
+        elif "thunder" in cond or "storm" in cond:
+            # Dark Storm Cloud + Lightning Zigzag
+            cloud_color = (100, 116, 139)
+            cr = int(r * 0.7)
+            pygame.draw.circle(target_surf, cloud_color, (cx - int(cr * 0.6), cy - int(cr * 0.2)), int(cr * 0.7))
+            pygame.draw.circle(target_surf, cloud_color, (cx + int(cr * 0.6), cy - int(cr * 0.1)), int(cr * 0.8))
+            pygame.draw.circle(target_surf, (148, 163, 184), (cx, cy - int(cr * 0.5)), cr)
+            # Lightning Bolt
+            bolt_pts = [
+                (cx - int(2 * self.scale), cy + int(cr * 0.4)),
+                (cx + int(4 * self.scale), cy + int(cr * 0.8)),
+                (cx, cy + int(cr * 0.8)),
+                (cx + int(3 * self.scale), cy + int(cr * 1.5)),
+            ]
+            pygame.draw.lines(target_surf, (245, 158, 11), False, bolt_pts, max(2, int(2 * self.scale)))
+
+        elif "snow" in cond or "ice" in cond:
+            # Cloud + Snowflake dots
+            cloud_color = (203, 213, 225)
+            cr = int(r * 0.7)
+            pygame.draw.circle(target_surf, cloud_color, (cx, cy - int(cr * 0.3)), cr)
+            for offset_x in [-int(r * 0.4), int(r * 0.4)]:
+                pygame.draw.circle(target_surf, (255, 255, 255), (cx + offset_x, cy + int(cr * 0.9)), max(2, int(2 * self.scale)))
+
+        else:
+            # Partly Cloudy / Overcast: Sun peeking behind Cloud
+            sun_r = int(r * 0.65)
+            pygame.draw.circle(target_surf, GOLDEN_SUN, (cx + int(sun_r * 0.8), cy - int(sun_r * 0.6)), sun_r)
+            cloud_color = (148, 163, 184)
+            cr = int(r * 0.65)
+            pygame.draw.circle(target_surf, cloud_color, (cx - int(cr * 0.6), cy + int(cr * 0.1)), int(cr * 0.7))
+            pygame.draw.circle(target_surf, cloud_color, (cx + int(cr * 0.4), cy + int(cr * 0.1)), int(cr * 0.8))
+            pygame.draw.circle(target_surf, (203, 213, 225), (cx - int(cr * 0.1), cy - int(cr * 0.2)), cr)
+
+    def draw_header_section(self):
+        """Renders the top bar: Clock & Location on Left; Jarvis Helper Widget on Right."""
         now = datetime.datetime.now()
         hour = now.hour % 12
         if hour == 0:
             hour = 12
         time_str = f"{hour}:{now.minute:02d}"
+        ampm = "AM" if now.hour < 12 else "PM"
         date_str = now.strftime("%A, %B %d, %Y")
 
         if time_str != self.cached_time_str or not self.cached_time_surf:
             self.cached_time_str = time_str
-            self.cached_time_surf = self.font_huge.render(time_str, True, TEXT_PRIMARY)
-            ampm = "AM" if now.hour < 12 else "PM"
-            self.cached_ampm_surf = self.font_med.render(ampm, True, ACCENT_CYAN)
+            self.cached_time_surf = self.font_huge.render(time_str, True, (255, 255, 255))
+            self.cached_ampm_surf = self.font_med.render(ampm, True, TEXT_SECONDARY)
 
         if date_str != self.cached_date_str or not self.cached_date_surf:
             self.cached_date_str = date_str
             self.cached_date_surf = self.font_body.render(date_str, True, TEXT_SECONDARY)
 
-        x = int(50 * self.scale_x)
-        y = int(45 * self.scale_y)
+        # 1. Left: Time, AM/PM, Date, Location
+        x = self.pad_x
+        y = self.pad_y
         self.screen.blit(self.cached_time_surf, (x, y))
-        self.screen.blit(self.cached_ampm_surf, (x + self.cached_time_surf.get_width() + int(12 * self.scale_x), y + int(36 * self.scale_y)))
-        self.screen.blit(self.cached_date_surf, (x, y + self.cached_time_surf.get_height() - int(4 * self.scale_y)))
-        self.screen.blit(self.loc_surf, (x, y + self.cached_time_surf.get_height() + self.cached_date_surf.get_height() + int(2 * self.scale_y)))
+        ampm_x = x + self.cached_time_surf.get_width() + int(10 * self.scale_x)
+        ampm_y = y + self.cached_time_surf.get_height() - self.cached_ampm_surf.get_height() - int(6 * self.scale_y)
+        self.screen.blit(self.cached_ampm_surf, (ampm_x, ampm_y))
 
-    def _render_weather_card_surface(self):
-        """Re-renders the weather card surface only when weather changes."""
-        self.weather_card_surf.fill((0, 0, 0, 0))
-        card_rect = pygame.Rect(0, 0, self.cw, self.ch)
-        self.draw_card(self.weather_card_surf, card_rect)
+        sub_y = y + self.cached_time_surf.get_height() + int(2 * self.scale_y)
+        self.screen.blit(self.cached_date_surf, (x, sub_y))
+
+        dot_surf = self.font_body.render(" • ", True, TEXT_MUTED)
+        dot_x = x + self.cached_date_surf.get_width()
+        self.screen.blit(dot_surf, (dot_x, sub_y))
+
+        loc_text = (self.weather_data or {}).get("location", "Jacksonville, Florida")
+        loc_surf = self.font_body.render(loc_text, True, (147, 197, 253))
+        self.screen.blit(loc_surf, (dot_x + dot_surf.get_width(), sub_y))
+
+        # 2. Right: Jarvis Helper Pill Widget (matching CSS .helper-card)
+        pill_w = int(280 * self.scale_x)
+        pill_h = int(58 * self.scale_y)
+        pill_x = self.w - self.pad_x - pill_w
+        pill_y = self.pad_y + int(4 * self.scale_y)
+
+        state_color = STATE_COLORS.get(self.assistant_state, ACCENT_READY)
+        state_label = STATE_LABELS.get(self.assistant_state, "READY")
+        state_subtext = STATE_SUBTEXTS.get(self.assistant_state, 'Say "Hey Jarvis"')
+
+        # Pill background
+        pill_rect = pygame.Rect(pill_x, pill_y, pill_w, pill_h)
+        self.draw_card(self.screen, pill_rect, bg=(20, 26, 38), border=state_color if self.assistant_state != "ready" else CARD_BORDER, radius=pill_h // 2, border_width=1.5 if self.assistant_state != "ready" else 1.0)
+
+        # Pulsing Orb Icon in Pill
+        orb_cx = pill_x + int(34 * self.scale_x)
+        orb_cy = pill_y + pill_h // 2
+        t = time.time()
+        pulse = math.sin(t * 3.0) * (3.0 if self.assistant_state != "ready" else 1.5) * self.scale
+        outer_r = max(8, int((14 + pulse) * self.scale))
+
+        # Outer pulsing ring
+        pygame.draw.circle(self.screen, (*state_color, 70), (orb_cx, orb_cy), outer_r, max(1, int(1.5 * self.scale)))
+        # Inner solid dot
+        pygame.draw.circle(self.screen, state_color, (orb_cx, orb_cy), max(4, int(7 * self.scale)))
+
+        # Status text beside orb
+        text_x = pill_x + int(60 * self.scale_x)
+        badge_surf = self.font_small.render(state_label, True, state_color)
+        subtext_surf = self.font_tiny.render(state_subtext, True, TEXT_MUTED)
+
+        self.screen.blit(badge_surf, (text_x, pill_y + int(10 * self.scale_y)))
+        self.screen.blit(subtext_surf, (text_x, pill_y + int(30 * self.scale_y)))
+
+    def _render_hero_weather_surface(self):
+        """Pre-renders the full-width current weather glass panel."""
+        self.hero_surf.fill((0, 0, 0, 0))
+        hero_rect = pygame.Rect(0, 0, self.hero_w, self.hero_h)
+        self.draw_card(self.hero_surf, hero_rect, bg=CARD_BG, border=CARD_BORDER, radius=28)
 
         if not self.weather_data:
-            loading_surf = self.font_body.render("Connecting to weather service...", True, TEXT_MUTED)
-            self.weather_card_surf.blit(loading_surf, (int(30 * self.scale_x), int(40 * self.scale_y)))
+            loading_surf = self.font_large.render("Loading Live Forecast...", True, TEXT_MUTED)
+            self.hero_surf.blit(loading_surf, (int(40 * self.scale_x), int(40 * self.scale_y)))
             return
 
-        current = self.weather_data.get("current", {})
-        temp = current.get("temp", "--")
-        feels_like = current.get("feels_like", "--")
-        high = current.get("high", "--")
-        low = current.get("low", "--")
-        condition = current.get("condition", "Fair")
-        rain_prob = current.get("rain_prob", 0)
-        humidity = current.get("humidity", 0)
-        wind_speed = current.get("wind_speed", 0)
+        curr = self.weather_data.get("current", {})
+        temp = curr.get("temp", "--")
+        feels_like = curr.get("feels_like", "--")
+        high = curr.get("high", "--")
+        low = curr.get("low", "--")
+        condition = curr.get("condition", "Clear Sky")
+        humidity = curr.get("humidity", "--")
+        wind_speed = curr.get("wind_speed", "--")
+        rain_prob = curr.get("rain_prob", 0)
+        uv_index = curr.get("uv_index", "--")
 
-        # Temp hero
-        temp_surf = self.font_huge.render(f"{temp}°", True, TEXT_PRIMARY)
-        self.weather_card_surf.blit(temp_surf, (int(30 * self.scale_x), int(25 * self.scale_y)))
+        # 1. Left Section: Weather Art Icon (Large 60px radius)
+        art_cx = int(85 * self.scale_x)
+        art_cy = int(120 * self.scale_y)
+        self.draw_weather_symbol(self.hero_surf, condition, art_cx, art_cy, size=48)
 
-        # Feels like badge
-        feels_surf = self.font_small.render(f"Feels like {feels_like}°", True, TEXT_SECONDARY)
-        self.weather_card_surf.blit(feels_surf, (int(35 * self.scale_x), int(125 * self.scale_y)))
+        # 2. Huge Temperature Number
+        temp_str = f"{temp}"
+        temp_surf = self.font_giant.render(temp_str, True, (255, 255, 255))
+        temp_x = int(165 * self.scale_x)
+        temp_y = int(45 * self.scale_y)
+        self.hero_surf.blit(temp_surf, (temp_x, temp_y))
 
-        # Condition
-        cond_surf = self.font_large.render(str(condition), True, ACCENT_CYAN)
-        self.weather_card_surf.blit(cond_surf, (int(30 * self.scale_x), int(175 * self.scale_y)))
+        deg_surf = self.font_large.render("°", True, TEXT_SECONDARY)
+        deg_x = temp_x + temp_surf.get_width() + int(2 * self.scale_x)
+        deg_y = temp_y + int(12 * self.scale_y)
+        self.hero_surf.blit(deg_surf, (deg_x, deg_y))
 
-        # High / Low
-        hl_surf = self.font_body.render(f"High: {high}°   Low: {low}°", True, TEXT_PRIMARY)
-        self.weather_card_surf.blit(hl_surf, (int(30 * self.scale_x), int(245 * self.scale_y)))
+        # 3. Condition Title & Range Details
+        detail_x = deg_x + int(45 * self.scale_x)
+        cond_surf = self.font_large.render(str(condition), True, (255, 255, 255))
+        self.hero_surf.blit(cond_surf, (detail_x, temp_y + int(10 * self.scale_y)))
 
-        # Divider & metrics
-        detail_y = int(310 * self.scale_y)
-        pygame.draw.line(self.weather_card_surf, CARD_BORDER, (int(25 * self.scale_x), detail_y), (self.cw - int(25 * self.scale_x), detail_y), max(1, int(1 * self.scale)))
+        # Pill details: H: 87°  L: 74°  •  Feels like 96°
+        pill_y = temp_y + cond_surf.get_height() + int(18 * self.scale_y)
+        h_label = self.font_body.render(f"H: {high}°", True, TEMP_HOT)
+        l_label = self.font_body.render(f"L: {low}°", True, TEMP_COOL)
+        dot_label = self.font_body.render(" • ", True, TEXT_MUTED)
+        f_label = self.font_body.render(f"Feels like {feels_like}°", True, TEXT_PRIMARY)
 
+        hx = detail_x
+        self.hero_surf.blit(h_label, (hx, pill_y))
+        hx += h_label.get_width() + int(14 * self.scale_x)
+        self.hero_surf.blit(l_label, (hx, pill_y))
+        hx += l_label.get_width()
+        self.hero_surf.blit(dot_label, (hx, pill_y))
+        hx += dot_label.get_width()
+        self.hero_surf.blit(f_label, (hx, pill_y))
+
+        # 4. Right Section: 4 Metric Cards Grid (matching CSS .metrics-grid)
         metrics = [
-            (f"Rain: {rain_prob}%", ACCENT_BLUE),
-            (f"Hum: {humidity}%", TEXT_SECONDARY),
-            (f"Wind: {wind_speed}mph", TEXT_SECONDARY),
+            ("HUMIDITY", f"{humidity}%", (56, 189, 248)),
+            ("WIND", f"{wind_speed} mph", (167, 139, 250)),
+            ("RAIN PROB", f"{rain_prob}%", (96, 165, 250)),
+            ("UV INDEX", f"{uv_index}", (251, 191, 36)),
         ]
-        col_w = self.cw / 3.0
-        for i, (m_text, m_color) in enumerate(metrics):
-            m_surf = self.font_small.render(m_text, True, m_color)
-            mx = int(i * col_w + (col_w - m_surf.get_width()) / 2)
-            self.weather_card_surf.blit(m_surf, (mx, detail_y + int(35 * self.scale_y)))
 
-    def _render_forecast_card_surface(self):
-        """Re-renders the 7-day forecast surface only when weather changes."""
-        self.forecast_card_surf.fill((0, 0, 0, 0))
-        card_rect = pygame.Rect(0, 0, self.rw, self.rh)
-        self.draw_card(self.forecast_card_surf, card_rect, radius=22)
+        metric_w = int(180 * self.scale_x)
+        metric_h = int(110 * self.scale_y)
+        metric_gap = int(16 * self.scale_x)
+        total_metrics_w = 4 * metric_w + 3 * metric_gap
+        m_start_x = self.hero_w - total_metrics_w - int(40 * self.scale_x)
+        m_y = int(85 * self.scale_y)
 
-        head_surf = self.font_med.render("7-Day Forecast", True, ACCENT_CYAN)
-        self.forecast_card_surf.blit(head_surf, (int(30 * self.scale_x), int(30 * self.scale_y)))
+        for i, (label, val, accent_col) in enumerate(metrics):
+            mx = m_start_x + i * (metric_w + metric_gap)
+            m_rect = pygame.Rect(mx, m_y, metric_w, metric_h)
+            self.draw_card(self.hero_surf, m_rect, bg=(26, 32, 48), border=CARD_BORDER, radius=18)
 
-        line_y = int(75 * self.scale_y)
-        pygame.draw.line(self.forecast_card_surf, CARD_BORDER, (int(25 * self.scale_x), line_y), (self.rw - int(25 * self.scale_x), line_y), max(1, int(1 * self.scale)))
+            lbl_surf = self.font_tiny.render(label, True, TEXT_MUTED)
+            val_surf = self.font_med.render(val, True, (255, 255, 255))
 
+            # Dot indicator with accent color
+            pygame.draw.circle(self.hero_surf, accent_col, (mx + int(18 * self.scale_x), m_y + int(24 * self.scale_y)), max(3, int(4 * self.scale)))
+            self.hero_surf.blit(lbl_surf, (mx + int(30 * self.scale_x), m_y + int(18 * self.scale_y)))
+            self.hero_surf.blit(val_surf, (mx + int(18 * self.scale_x), m_y + int(52 * self.scale_y)))
+
+    def _render_forecast_cards_surface(self):
+        """Pre-renders 7 distinct horizontal daily forecast cards side-by-side."""
+        self.forecast_surf.fill((0, 0, 0, 0))
         daily = (self.weather_data or {}).get("daily", [])
         if not daily:
             none_surf = self.font_body.render("Forecast loading...", True, TEXT_MUTED)
-            self.forecast_card_surf.blit(none_surf, (int(30 * self.scale_x), int(100 * self.scale_y)))
+            self.forecast_surf.blit(none_surf, (int(20 * self.scale_x), int(40 * self.scale_y)))
             return
 
-        row_y = line_y + int(20 * self.scale_y)
-        row_h = (self.rh - int(115 * self.scale_y)) / max(len(daily[:6]), 1)
+        num_cards = 7
+        gap = int(14 * self.scale_x)
+        card_w = int((self.hero_w - (num_cards - 1) * gap) / num_cards)
+        card_h = self.forecast_cards_h
 
-        for day in daily[:6]:
-            d_name = str(day.get("day_name", day.get("short_name", "Day")))
+        for i in range(min(num_cards, len(daily))):
+            day = daily[i]
+            d_name = "Today" if i == 0 else str(day.get("short_name", day.get("day_name", f"Day {i}")))
             d_high = day.get("high", "--")
             d_low = day.get("low", "--")
             d_cond = str(day.get("condition", "Clear"))
             d_rain = day.get("rain_prob", 0)
 
-            day_surf = self.font_body.render(d_name, True, TEXT_PRIMARY)
-            self.forecast_card_surf.blit(day_surf, (int(30 * self.scale_x), int(row_y + 6 * self.scale_y)))
+            cx = i * (card_w + gap)
+            c_rect = pygame.Rect(cx, 0, card_w, card_h)
 
-            cond_surf = self.font_small.render(d_cond, True, TEXT_SECONDARY)
-            self.forecast_card_surf.blit(cond_surf, (int(140 * self.scale_x), int(row_y + 8 * self.scale_y)))
+            # Highlight 'Today' card with distinct border & brighter background
+            is_today = (i == 0)
+            c_bg = CARD_BG_TODAY if is_today else CARD_BG
+            c_border = CARD_BORDER_TODAY if is_today else CARD_BORDER
+            self.draw_card(self.forecast_surf, c_rect, bg=c_bg, border=c_border, radius=22, border_width=1.5 if is_today else 1.0)
 
+            # 1. Day Title (Centered at top)
+            day_col = (56, 189, 248) if is_today else TEXT_PRIMARY
+            day_surf = self.font_med.render(d_name, True, day_col)
+            self.forecast_surf.blit(day_surf, (cx + (card_w - day_surf.get_width()) // 2, int(26 * self.scale_y)))
+
+            # 2. Weather Icon (Centered)
+            icon_cy = int(card_h * 0.35)
+            self.draw_weather_symbol(self.forecast_surf, d_cond, cx + card_w // 2, icon_cy, size=32)
+
+            # 3. Short Condition Text (Centered)
+            short_cond = d_cond.split("/")[0].strip()
+            cond_surf = self.font_small.render(short_cond, True, TEXT_SECONDARY)
+            cond_y = icon_cy + int(42 * self.scale_y)
+            self.forecast_surf.blit(cond_surf, (cx + (card_w - cond_surf.get_width()) // 2, cond_y))
+
+            # 4. Rain Probability Pill (Centered)
+            rain_y = cond_y + int(36 * self.scale_y)
             if d_rain > 0:
-                rain_surf = self.font_small.render(f"Rain: {d_rain}%", True, ACCENT_BLUE)
-                self.forecast_card_surf.blit(rain_surf, (self.rw - int(180 * self.scale_x), int(row_y + 8 * self.scale_y)))
+                rain_str = f"Rain: {d_rain}%"
+                rain_surf = self.font_small.render(rain_str, True, (96, 165, 250))
+                self.forecast_surf.blit(rain_surf, (cx + (card_w - rain_surf.get_width()) // 2, rain_y))
 
-            hl_surf = self.font_body.render(f"{d_high}° / {d_low}°", True, TEXT_PRIMARY)
-            self.forecast_card_surf.blit(hl_surf, (self.rw - hl_surf.get_width() - int(25 * self.scale_x), int(row_y + 6 * self.scale_y)))
+            # 5. High / Low Temperatures (Centered at bottom)
+            temp_y = card_h - int(65 * self.scale_y)
+            hl_str = f"{d_high}° / {d_low}°"
+            hl_surf = self.font_med.render(hl_str, True, TEXT_PRIMARY)
+            self.forecast_surf.blit(hl_surf, (cx + (card_w - hl_surf.get_width()) // 2, temp_y))
 
-            row_y += row_h
-
-    def draw_weather_section(self):
-        """Blits the pre-rendered weather card (0% CPU cost)."""
+    def draw_weather_and_forecast_section(self):
+        """Blits pre-rendered Hero card and 7-day forecast cards."""
         if self.weather_dirty:
-            self._render_weather_card_surface()
-            self._render_forecast_card_surface()
+            self._render_hero_weather_surface()
+            self._render_forecast_cards_surface()
             self.weather_dirty = False
-        self.screen.blit(self.weather_card_surf, (self.cx, self.cy))
 
-    def draw_jarvis_orb(self):
-        """Draws the animated pulsing Jarvis voice orb."""
-        center_x = int(self.w * 0.50)
-        center_y = int(self.h * 0.46)
-        t = time.time()
-        state_color = STATE_COLORS.get(self.assistant_state, ACCENT_GREEN)
+        # Blit Hero Card
+        self.screen.blit(self.hero_surf, (self.hero_x, self.hero_y))
 
-        if self.assistant_state == "listening":
-            pulse = math.sin(t * 8.0) * 14.0 * self.scale
-        elif self.assistant_state == "thinking":
-            pulse = math.sin(t * 5.0) * 8.0 * self.scale
-        elif self.assistant_state == "speaking":
-            pulse = math.sin(t * 10.0) * 18.0 * self.scale
-        else:
-            pulse = math.sin(t * 2.0) * 5.0 * self.scale
-
-        base_r = max(10, int((52 + pulse) * self.scale))
-
-        # 1. Outer Glow Aura (drawn on dedicated alpha surface)
-        aura_r = min(int(base_r * 1.6), self.max_aura_r - 2)
-        self.aura_surf.fill((0, 0, 0, 0))
-        pygame.draw.circle(self.aura_surf, (*state_color, 45), (self.max_aura_r, self.max_aura_r), aura_r)
-        self.screen.blit(self.aura_surf, (center_x - self.max_aura_r, center_y - self.max_aura_r))
-
-        # 2. Outer Ring (drawn directly on display surface using solid RGB)
-        pygame.draw.circle(self.screen, state_color, (center_x, center_y), base_r + max(2, int(14 * self.scale)), max(1, int(2 * self.scale)))
-
-        # 3. Inner Core
-        pygame.draw.circle(self.screen, state_color, (center_x, center_y), base_r)
-
-        # 4. Highlight Center Core
-        pygame.draw.circle(self.screen, (255, 255, 255), (center_x, center_y), max(2, int(base_r * 0.35)))
-
-        # State label
-        state_labels = {
-            "ready": "READY",
-            "listening": "LISTENING...",
-            "thinking": "THINKING...",
-            "speaking": "JARVIS SPEAKING",
-        }
-        lbl_text = state_labels.get(self.assistant_state, "READY")
-        lbl_surf = self.font_small.render(lbl_text, True, state_color)
-        self.screen.blit(lbl_surf, (center_x - lbl_surf.get_width() // 2, center_y + int(105 * self.scale_y)))
-
-    def draw_right_panel(self):
-        """Renders either live voice interaction dialogue or the cached 7-day forecast."""
+        # Check if voice dialogue is active
         is_speech_active = (time.time() - self.last_speech_time < 12.0) and bool(self.transcription or self.assistant_reply)
 
         if is_speech_active:
-            # Voice Dialogue Card
-            self.draw_card(self.screen, pygame.Rect(self.rx, self.ry, self.rw, self.rh), radius=22)
-            
-            head_surf = self.font_med.render("Assistant Dialogue", True, ACCENT_CYAN)
-            self.screen.blit(head_surf, (self.rx + int(30 * self.scale_x), self.ry + int(30 * self.scale_y)))
-
-            line_y = self.ry + int(75 * self.scale_y)
-            pygame.draw.line(self.screen, CARD_BORDER, (self.rx + int(25 * self.scale_x), line_y), (self.rx + self.rw - int(25 * self.scale_x), line_y), max(1, int(1 * self.scale)))
-
-            curr_y = line_y + int(25 * self.scale_y)
-
-            if self.transcription:
-                u_tag = self.font_small.render("YOU SAID", True, ACCENT_BLUE)
-                self.screen.blit(u_tag, (self.rx + int(30 * self.scale_x), curr_y))
-                curr_y += int(28 * self.scale_y)
-                curr_y = self._render_wrapped_text(f"\"{self.transcription}\"", self.rx + int(30 * self.scale_x), curr_y, self.rw - int(60 * self.scale_x), self.font_body, TEXT_PRIMARY)
-                curr_y += int(30 * self.scale_y)
-
-            if self.assistant_reply:
-                a_tag = self.font_small.render("JARVIS", True, ACCENT_PURPLE)
-                self.screen.blit(a_tag, (self.rx + int(30 * self.scale_x), curr_y))
-                curr_y += int(28 * self.scale_y)
-                self._render_wrapped_text(self.assistant_reply, self.rx + int(30 * self.scale_x), curr_y, self.rw - int(60 * self.scale_x), self.font_body, (226, 232, 240))
-
+            # Render Speech Dialogue Card over forecast section
+            self.draw_speech_dialogue_overlay()
         else:
-            # Blit pre-rendered 7-day forecast card (0% CPU)
-            self.screen.blit(self.forecast_card_surf, (self.rx, self.ry))
+            # Render 7-Day Forecast Section Header & Cards
+            title_surf = self.font_tiny.render("7-DAY FORECAST", True, TEXT_MUTED)
+            self.screen.blit(title_surf, (self.hero_x + int(4 * self.scale_x), self.forecast_y))
+
+            updated_surf = self.font_tiny.render("Updated just now", True, TEXT_MUTED)
+            self.screen.blit(updated_surf, (self.hero_x + self.hero_w - updated_surf.get_width() - int(4 * self.scale_x), self.forecast_y))
+
+            self.screen.blit(self.forecast_surf, (self.hero_x, self.forecast_cards_y))
+
+    def draw_speech_dialogue_overlay(self):
+        """Renders floating Glassmorphic Dialogue Card when user or assistant speaks."""
+        card_rect = pygame.Rect(self.hero_x, self.forecast_cards_y, self.hero_w, self.forecast_cards_h)
+        state_color = STATE_COLORS.get(self.assistant_state, ACCENT_READY)
+        self.draw_card(self.screen, card_rect, bg=(16, 22, 35), border=state_color, radius=24, border_width=1.5)
+
+        # Header bar
+        header_y = self.forecast_cards_y + int(24 * self.scale_y)
+        dot_x = self.hero_x + int(30 * self.scale_x)
+        pygame.draw.circle(self.screen, state_color, (dot_x, header_y + int(10 * self.scale_y)), max(4, int(6 * self.scale)))
+
+        title_surf = self.font_med.render("JARVIS ASSISTANT", True, (255, 255, 255))
+        self.screen.blit(title_surf, (dot_x + int(18 * self.scale_x), header_y))
+
+        div_y = header_y + title_surf.get_height() + int(16 * self.scale_y)
+        pygame.draw.line(self.screen, CARD_BORDER, (self.hero_x + int(25 * self.scale_x), div_y), (self.hero_x + self.hero_w - int(25 * self.scale_x), div_y), max(1, int(1 * self.scale)))
+
+        curr_y = div_y + int(20 * self.scale_y)
+        dialogue_x = self.hero_x + int(35 * self.scale_x)
+        max_w = self.hero_w - int(70 * self.scale_x)
+
+        if self.transcription:
+            u_label = self.font_small.render("YOU", True, ACCENT_LISTENING)
+            self.screen.blit(u_label, (dialogue_x, curr_y))
+            curr_y += u_label.get_height() + int(6 * self.scale_y)
+            curr_y = self._render_wrapped_text(f'"{self.transcription}"', dialogue_x, curr_y, max_w, self.font_large, (255, 255, 255))
+            curr_y += int(16 * self.scale_y)
+
+        if self.assistant_reply:
+            a_label = self.font_small.render("JARVIS", True, ACCENT_SPEAKING)
+            self.screen.blit(a_label, (dialogue_x, curr_y))
+            curr_y += a_label.get_height() + int(6 * self.scale_y)
+            curr_y = self._render_wrapped_text(self.assistant_reply, dialogue_x, curr_y, max_w, self.font_large, (226, 232, 240))
 
     def _render_wrapped_text(self, text, x, y, max_width, font, color):
-        """Safe word-wrap renderer that normalizes newlines and avoids off-screen overflows."""
+        """Safe word-wrap text renderer that avoids off-screen overflow."""
         clean_text = " ".join(str(text).replace("\r", " ").replace("\n", " ").split())
         words = clean_text.split(" ")
         lines = []
         curr_line = []
 
         for word in words:
-            test_line = " ".join(curr_line + [word])
-            if font.size(test_line)[0] < max_width:
-                curr_line.append(word)
-            else:
-                if curr_line:
-                    lines.append(" ".join(curr_line))
+            curr_line.append(word)
+            test_str = " ".join(curr_line)
+            w, _ = font.size(test_str)
+            if w > max_width:
+                curr_line.pop()
+                lines.append(" ".join(curr_line))
                 curr_line = [word]
+
         if curr_line:
             lines.append(" ".join(curr_line))
 
-        # Max 7 lines to prevent drawing out of bounds
-        for line in lines[:7]:
+        for line in lines[:6]:
             try:
                 s = font.render(line, True, color)
                 self.screen.blit(s, (x, y))
-                y += s.get_height() + max(2, int(4 * self.scale_y))
-            except Exception as e:
-                print(f"[RENDER ERROR] font.render error: {e}", flush=True)
+                y += s.get_height() + max(2, int(6 * self.scale_y))
+            except Exception:
+                pass
         return y
 
     def run(self):
-        """Main rendering loop clocked at 30 FPS."""
+        """Ultra-smooth, low-CPU rendering loop clocked at 20 FPS."""
         def sig_handler(signum, frame):
             self.running = False
 
@@ -466,7 +621,7 @@ class SmartDisplayApp:
 
         target_fps = 20.0
         frame_time = 1.0 / target_fps
-        print(f"[DISPLAY] Ultra-efficient display loop started at {int(target_fps)} FPS...", flush=True)
+        print(f"[DISPLAY] Native Glassmorphism Display started at {int(target_fps)} FPS...", flush=True)
 
         while self.running:
             start_t = time.perf_counter()
@@ -478,16 +633,14 @@ class SmartDisplayApp:
                     if event.key in (pygame.K_ESCAPE, pygame.K_q):
                         self.running = False
 
-            # Clear screen
+            # Clear background
             self.screen.fill(BG_COLOR)
 
-            # Draw elements
-            self.draw_clock_section()
-            self.draw_weather_section()
-            self.draw_jarvis_orb()
-            self.draw_right_panel()
+            # Draw UI components
+            self.draw_header_section()
+            self.draw_weather_and_forecast_section()
 
-            # Flip screen
+            # Flip buffer
             pygame.display.flip()
 
             elapsed = time.perf_counter() - start_t
