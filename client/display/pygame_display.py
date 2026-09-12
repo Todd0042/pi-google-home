@@ -53,9 +53,12 @@ STATE_COLORS = {
 
 class SmartDisplayApp:
     def __init__(self):
-        pygame.init()
+        pygame.display.init()
         pygame.font.init()
-        pygame.mouse.set_visible(False)
+        try:
+            pygame.mouse.set_visible(False)
+        except Exception:
+            pass
 
         # Detect display mode & resolution
         info = pygame.display.Info()
@@ -461,8 +464,13 @@ class SmartDisplayApp:
         signal.signal(signal.SIGTERM, sig_handler)
         signal.signal(signal.SIGINT, sig_handler)
 
-        print("[DISPLAY] Ultra-efficient display loop started at 30 FPS...", flush=True)
+        target_fps = 20.0
+        frame_time = 1.0 / target_fps
+        print(f"[DISPLAY] Ultra-efficient display loop started at {int(target_fps)} FPS...", flush=True)
+
         while self.running:
+            start_t = time.perf_counter()
+
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
@@ -481,7 +489,11 @@ class SmartDisplayApp:
 
             # Flip screen
             pygame.display.flip()
-            self.clock.tick(30)
+
+            elapsed = time.perf_counter() - start_t
+            sleep_sec = frame_time - elapsed
+            if sleep_sec > 0:
+                time.sleep(sleep_sec)
 
         pygame.quit()
 
