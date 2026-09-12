@@ -223,9 +223,14 @@ class IntentEngine:
         if re.search(r"volume down|turn (?:the )?volume down|decrease (?:the )?volume|lower (?:the )?volume|\bquieter\b", clean):
             return ({"action": "volume_delta", "value": -5}, "Volume down five percent.")
 
-        # Reboot the Pi
-        if re.search(r"\b(reboot|restart)\b", clean):
+        # Reboot the Pi ("reboot" / "re-boot" / "restart")
+        if re.search(r"\bre[\s-]*boot\b|\brestart\b", clean):
             return ({"action": "reboot"}, "Rebooting the Raspberry Pi now.")
+
+        # Shut down / power off the Pi safely ("shutdown" / "shut down" / "power off")
+        if re.search(r"\bshut[\s-]*down\b|\bpower[\s-]*(?:off|down)\b|" \
+                     r"\bturn off (?:the )?(?:pi|pie|raspberry(?:\s*pi)?|device)\b", clean):
+            return ({"action": "shutdown"}, "Powering off the Raspberry Pi now.")
 
         # Display off / on
         if re.search(r"display off|screen off|turn off (?:the )?(?:display|screen)", clean):

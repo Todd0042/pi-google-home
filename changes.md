@@ -53,3 +53,14 @@ All changes below were made and deployed this session. The Pi (client + display)
 | Pi client | #6 | `assistant-client` restart (NRestarts=0) |
 | Pi display | #6 | `smart-display` restart (NRestarts=0) |
 | Host server | #6, #7 | gateway relaunched via `scripts/run_server.sh` (unbuffered) |
+| Pi client | #8 | `assistant-client` restart (NRestarts=0) |
+| Host server | #8 | gateway relaunched via `scripts/run_server.sh` (unbuffered) |
+
+## 8. Shutdown command + robust reboot/shutdown matching — `server/brain/intent.py`, `client/main.py`
+- New voice command `shutdown` → client runs `sudo systemctl poweroff` (delayed ~5s so the confirmation finishes) so the Pi can be powered down safely without unplugging.
+  - Requires passwordless sudo on the Pi: `alarm ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff` appended to `/etc/sudoers.d/zz-pi-home-reboot`.
+- Matcher hardened for Whisper transcription quirks:
+  - Reboot accepts `re-boot` / `re boot` / `reboot` / `restart`.
+  - Shutdown accepts `shutdown` / `shut down` / `shut-down` / `power off` / `power-off` / `power down` / `turn off the pi|pie|raspberry|device`.
+  - Whisper transcribes "the pi" as **"the pie"** — `pie` is now an accepted variant, caught live during E2E.
+- E2E verified on the live pipeline: **4/4** (`re-boot the pi` → reboot; `shut down the pi`, `power off`, `turn off the pi` → shutdown) with voiced confirmations. Final voice-command roster: reboot, shutdown, volume up/down, set volume to XX%, display on/off.

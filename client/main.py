@@ -206,6 +206,8 @@ class AssistantClient:
             print("[COMMAND] Display handled by smart-display process (skipping).", flush=True)
         elif action == "reboot":
             subprocess.Popen(["sh", "-c", "sleep 5 && sudo systemctl reboot"])
+        elif action == "shutdown":
+            subprocess.Popen(["sh", "-c", "sleep 5 && sudo systemctl poweroff"])
 
     async def run(self):
         # Capture through ALSA default, which asound.conf routes to hw:MICROPHONE,0
