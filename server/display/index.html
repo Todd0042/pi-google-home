@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Pi Smart Display</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/display/style.css">
+</head>
+<body>
+  <!-- Ambient Atmospheric Background -->
+  <div class="ambient-glow glow-1"></div>
+  <div class="ambient-glow glow-2"></div>
+  <div class="ambient-grid"></div>
+
+  <div class="display-container">
+    <!-- Top Header Bar -->
+    <header class="header-bar">
+      <div class="header-left">
+        <div class="clock-wrap">
+          <span id="clock-time">--:--</span>
+          <span id="clock-ampm">--</span>
+        </div>
+        <div class="date-location">
+          <span id="clock-date">Loading date...</span>
+          <span class="dot-separator">•</span>
+          <div class="location-pill">
+            <svg class="icon-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+              <circle cx="12" cy="10" r="3"></circle>
+            </svg>
+            <span id="header-location">Jacksonville, FL</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Top Right Corner: Dedicated Jarvis Helper Widget -->
+      <div class="header-right">
+        <div id="helper-widget" class="helper-card state-ready">
+          <div class="helper-core">
+            <div class="orb-outer-ring"></div>
+            <div class="orb-pulse"></div>
+            <div class="orb-visualizer">
+              <span class="bar bar-1"></span>
+              <span class="bar bar-2"></span>
+              <span class="bar bar-3"></span>
+              <span class="bar bar-4"></span>
+              <span class="bar bar-5"></span>
+            </div>
+            <div class="orb-icon">
+              <svg class="ai-sparkle" viewBox="0 0 24 24" fill="none">
+                <path d="M12 2L14.4 9.6L22 12L14.4 14.4L12 22L9.6 14.4L2 12L9.6 9.6L12 2Z" fill="currentColor"/>
+              </svg>
+            </div>
+          </div>
+          <div class="helper-info">
+            <div class="helper-status-row">
+              <span class="helper-dot"></span>
+              <span id="helper-state-label" class="helper-badge">READY</span>
+            </div>
+            <span id="helper-subtext" class="helper-subtext">Say "Hey Jarvis"</span>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content: Full Weather Screen -->
+    <main class="main-content">
+      <div class="hero-weather-grid">
+        <!-- Current Weather Hero Card -->
+        <div class="glass-panel current-weather-panel">
+          <div class="current-weather-main">
+            <div class="weather-art" id="current-weather-art">
+              <!-- Animated SVG inserted dynamically -->
+            </div>
+            <div class="temp-hero">
+              <div class="temp-number-wrap">
+                <span id="current-temp">--</span>
+                <span class="temp-deg">°</span>
+              </div>
+              <div class="condition-hero">
+                <h2 id="current-condition">Loading Forecast...</h2>
+                <div class="temp-range-pill">
+                  <span class="high-label">H: <span id="current-high">--°</span></span>
+                  <span class="low-label">L: <span id="current-low">--°</span></span>
+                  <span class="dot-separator">•</span>
+                  <span class="feels-label">Feels like <span id="current-feels">--°</span></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Secondary Metrics Strip -->
+          <div class="metrics-grid">
+            <div class="metric-card">
+              <div class="metric-icon humidity-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"></path>
+                </svg>
+              </div>
+              <div class="metric-body">
+                <span class="metric-label">Humidity</span>
+                <span id="metric-humidity" class="metric-val">--%</span>
+              </div>
+            </div>
+
+            <div class="metric-card">
+              <div class="metric-icon wind-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"></path>
+                </svg>
+              </div>
+              <div class="metric-body">
+                <span class="metric-label">Wind</span>
+                <span id="metric-wind" class="metric-val">-- mph</span>
+              </div>
+            </div>
+
+            <div class="metric-card">
+              <div class="metric-icon rain-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"></path>
+                  <path d="M8 19v2m8-2v2m-4-1v2"></path>
+                </svg>
+              </div>
+              <div class="metric-body">
+                <span class="metric-label">Precipitation</span>
+                <span id="metric-rain" class="metric-val">--%</span>
+              </div>
+            </div>
+
+            <div class="metric-card">
+              <div class="metric-icon uv-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="4"></circle>
+                  <path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+                </svg>
+              </div>
+              <div class="metric-body">
+                <span class="metric-label">UV Index</span>
+                <span id="metric-uv" class="metric-val">--</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 7-Day Forecast Section -->
+      <section class="forecast-section">
+        <div class="forecast-header">
+          <span class="forecast-title">7-DAY FORECAST</span>
+          <span class="forecast-refresh" id="last-updated">Updated just now</span>
+        </div>
+        <div class="forecast-carousel" id="forecast-cards-container">
+          <!-- Dynamically populated 7 days -->
+        </div>
+      </section>
+    </main>
+
+    <!-- Floating Assistant Speech Dialog Overlay -->
+    <div id="assistant-overlay" class="assistant-overlay hidden">
+      <div class="overlay-card glass-panel">
+        <div class="overlay-indicator">
+          <div class="glow-orb-mini"></div>
+          <span id="overlay-status-title">JARVIS</span>
+        </div>
+
+        <div class="conversation-stream">
+          <div id="user-speech-bubble" class="speech-bubble user-bubble hidden">
+            <span class="bubble-speaker">YOU</span>
+            <p id="user-speech-text" class="bubble-text"></p>
+          </div>
+
+          <div id="assistant-speech-bubble" class="speech-bubble assistant-bubble hidden">
+            <span class="bubble-speaker">JARVIS</span>
+            <p id="assistant-speech-text" class="bubble-text"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/display/app.js"></script>
+</body>
+</html>

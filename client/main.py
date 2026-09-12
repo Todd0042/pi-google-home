@@ -31,7 +31,7 @@ WAKE_THRESHOLD = 0.5
 SILENCE_RMS = 60.0
 SPEECH_RMS = 120.0
 POST_SPEECH_SILENCE_SEC = 1.2
-MAX_RECORDING_SEC = 10.0
+MAX_RECORDING_SEC = 6.0
 
 def calculate_rms(data: np.ndarray) -> float:
     if len(data) == 0:
@@ -44,9 +44,9 @@ class AssistantClient:
         self.keyword = keyword
         self.player = AudioPlayer()
         self.pa = pyaudio.PyAudio()
+        self.ambient_rms = 100.0  # Rolling baseline of room noise floor
 
-        print("==> Initializing openWakeWord listener...")
-        openwakeword.utils.download_models()
+        print(f"\n[INIT] Initializing openWakeWord models for keyword: '{self.keyword}'...")
         all_paths = openwakeword.get_pretrained_model_paths("onnx")
         selected = [p for p in all_paths if self.keyword in os.path.basename(p)] or all_paths
         self.oww_model = Model(wakeword_models=selected, inference_framework="onnx")
@@ -55,17 +55,19 @@ class AssistantClient:
         print(f"==> Assistant Client Ready! Target Wake Word: '{self.active_model}'")
         print(f"==> Host Server: {self.server_url}")
 
-    async def record_and_stream(self, transport: AssistantClientTransport, mic_stream) -> None:
+    async def record_and_stream(self, transport: AssistantClientTransport, mic_stream, baseline_ambient: float) -> None:
         """Records voice command until end-of-speech silence is detected, streaming to server."""
         print("\n[LISTENING] >>> Listening for your voice query... <<<")
         speech_started = False
         silence_start_time = None
         record_start_time = time.time()
+        peak_rms = 0.0
 
-        # Dynamic VAD thresholds
-        speech_threshold = 300.0
-        silence_threshold = 180.0
-        post_speech_silence_sec = 0.9
+        # Calibrate directly from the continuous room noise baseline captured BEFORE keyword
+        ambient_rms = max(50.0, baseline_ambient)
+        speech_threshold = max(280.0, ambient_rms * 1.8)
+        silence_threshold = max(ambient_rms * 1.25, ambient_rms + 35.0)
+        post_speech_silence_sec = 0.50  # 500ms snappy silence cutoff
 
         while True:
             raw = mic_stream.read(STREAM_CHUNK, exception_on_overflow=False)
@@ -76,22 +78,24 @@ class AssistantClient:
 
             # Volume meter in terminal
             bars = "#" * min(int(rms / 100), 30)
-            print(f"\rRecording: [{bars:<30}] (RMS: {rms:5.1f})", end="", flush=True)
+            print(f"\rRecording: [{bars:<30}] (RMS: {rms:5.1f} | Cutoff: {silence_threshold:5.1f})", end="", flush=True)
 
             now = time.time()
             if rms > speech_threshold:
                 if not speech_started:
                     speech_started = True
+                peak_rms = max(peak_rms, rms)
                 silence_start_time = None
             elif speech_started:
-                if rms < silence_threshold:
+                # Dynamic silence: dropped below ambient silence threshold or 25% of speech peak
+                dynamic_cutoff = max(silence_threshold, peak_rms * 0.25)
+                if rms <= dynamic_cutoff:
                     if silence_start_time is None:
                         silence_start_time = now
                     elif now - silence_start_time >= post_speech_silence_sec:
                         print(f"\n[VAD] End of speech detected ({post_speech_silence_sec}s silence).")
                         break
                 else:
-                    # In between words
                     silence_start_time = None
 
             if now - record_start_time >= MAX_RECORDING_SEC:
@@ -111,8 +115,8 @@ class AssistantClient:
         except Exception:
             pass
 
-    async def handle_turn(self, mic_stream):
-        """Executes a full interactive assistant turn."""
+    async def handle_turn(self, mic_stream, baseline_ambient: float):
+        """Executes a full interactive assistant turn with progressive streaming playback."""
         # 1. Play activation chime on monitor speakers
         try:
             self.player.play_chime("wake.wav")
@@ -128,34 +132,27 @@ class AssistantClient:
             await transport.connect()
             await transport.send_event("wake_triggered")
 
-            # 3. Stream user query
-            await self.record_and_stream(transport, mic_stream)
+            # 3. Stream user query with pre-calibrated ambient floor
+            await self.record_and_stream(transport, mic_stream, baseline_ambient=baseline_ambient)
 
-            # 4. Await response from server
+            # 4. Await response from server & stream audio playback progressively in RAM
             print("[THINKING] Waiting for server transcription & response...")
-            
+
             def on_transcription(text: str):
                 print(f"\n[YOU SAID]: \"{text}\"")
 
             def on_reply(text: str):
                 print(f"[ASSISTANT]: \"{text}\"")
 
-            response_audio = await transport.receive_response(
+            def on_audio_chunk(audio_bytes: bytes):
+                print(f"[SPEAKING] Streaming voice playback ({len(audio_bytes)} bytes) in memory...")
+                self.player.play_wav_bytes(audio_bytes)
+
+            await transport.receive_response(
                 on_transcription=on_transcription,
                 on_reply=on_reply,
+                on_audio_chunk=on_audio_chunk,
             )
-
-            # 5. Play synthesized voice response through HDMI speakers
-            if response_audio:
-                print(f"[SPEAKING] Playing voice response through 15\" monitor speakers ({len(response_audio)} bytes)...")
-                tmp_path = "/tmp/assistant_response.wav"
-                with open(tmp_path, "wb") as f:
-                    f.write(response_audio)
-                self.player.play_wav(tmp_path)
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
 
         except Exception as e:
             print(f"\n[ERROR] Communication error with server {self.server_url}: {e}")
@@ -192,9 +189,13 @@ class AssistantClient:
                 audio_data = np.frombuffer(audio_raw, dtype=np.int16)
                 rms = calculate_rms(audio_data)
 
+                # Continuously track ambient noise floor while idle (exclude loud spikes)
+                if rms < 400.0:
+                    self.ambient_rms = 0.95 * self.ambient_rms + 0.05 * rms
+
                 # Energy gating
                 if rms < SILENCE_RMS:
-                    print(f"\r[Listening for 'Hey Jarvis'...] (Mic: {rms:4.1f})", end="", flush=True)
+                    print(f"\r[Listening for 'Hey Jarvis'...] (Mic: {rms:4.1f} | Ambient: {self.ambient_rms:4.1f})", end="", flush=True)
                     self.oww_model.preprocessor.audio_buffer.extend(audio_data)
                     await asyncio.sleep(0.01)
                     continue
@@ -205,9 +206,9 @@ class AssistantClient:
 
                 if score >= WAKE_THRESHOLD:
                     print(f"\n\n{'*' * 60}")
-                    print(f" [WAKE TRIGGERED] Score: {score:.3f}")
+                    print(f" [WAKE TRIGGERED] Score: {score:.3f} | Ambient: {self.ambient_rms:.1f} RMS")
                     print(f"{'*' * 60}")
-                    await self.handle_turn(mic_stream)
+                    await self.handle_turn(mic_stream, baseline_ambient=self.ambient_rms)
                     self._flush_mic_buffer(mic_stream)
                     self.oww_model.reset()
                     print("\n[READY] Listening for 'Hey Jarvis' again...\n")

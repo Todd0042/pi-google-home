@@ -35,6 +35,25 @@ class AudioPlayer:
             stream.stop_stream()
             stream.close()
 
+    def play_wav_bytes(self, audio_bytes: bytes):
+        """Plays WAV audio bytes directly from memory without disk I/O."""
+        import io
+        with wave.open(io.BytesIO(audio_bytes), "rb") as wf:
+            stream = self._pa.open(
+                format=self._pa.get_format_from_width(wf.getsampwidth()),
+                channels=wf.getnchannels(),
+                rate=wf.getframerate(),
+                output=True,
+            )
+            chunk_size = 2048
+            data = wf.readframes(chunk_size)
+            while len(data) > 0:
+                stream.write(data)
+                data = wf.readframes(chunk_size)
+
+            stream.stop_stream()
+            stream.close()
+
     def play_chime(self, chime_name: str = "wake.wav"):
         """Plays a system chime by filename from client/audio/chimes/."""
         path = os.path.join(CHIME_DIR, chime_name)

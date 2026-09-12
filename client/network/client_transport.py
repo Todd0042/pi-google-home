@@ -34,9 +34,11 @@ class AssistantClientTransport:
         self,
         on_transcription: Optional[Callable[[str], None]] = None,
         on_reply: Optional[Callable[[str], None]] = None,
+        on_audio_chunk: Optional[Callable[[bytes], None]] = None,
     ) -> bytes:
         """
         Listens for server events until TTS audio is received and turn completes.
+        Streams audio packets to on_audio_chunk as they arrive for low latency.
         Returns the synthesized response WAV bytes.
         """
         if not self.ws:
@@ -48,6 +50,8 @@ class AssistantClientTransport:
             msg = await self.ws.recv()
             if isinstance(msg, bytes):
                 response_audio.extend(msg)
+                if on_audio_chunk:
+                    on_audio_chunk(msg)
             else:
                 data = json.loads(msg)
                 event_type = data.get("type")

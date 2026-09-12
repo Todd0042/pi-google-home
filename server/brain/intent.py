@@ -8,8 +8,11 @@ import os
 import re
 import datetime
 from typing import Optional
-from server.integrations.weather import get_weather
-from server.integrations.web_search import search_web
+from dotenv import load_dotenv
+from server.integrations.weather import get_weather, get_weather_context
+from server.integrations.web_search import search_web, clean_speech_text
+
+load_dotenv()
 
 class IntentEngine:
     def __init__(self, gemini_api_key: Optional[str] = None):
@@ -46,35 +49,72 @@ class IntentEngine:
         if "who are you" in clean or "what is your name" in clean:
             return "I am your Raspberry Pi smart assistant, running Arch Linux ARM."
 
-        # 2. Weather Intent (Open-Meteo)
-        if any(w in clean for w in ["weather", "temperature", "forecast", "how hot", "how cold", "rain"]):
+        # 2. Weather Intent (Powered by Gemini with Live Multi-Day Open-Meteo Forecast)
+        weather_keywords = ["weather", "temperature", "forecast", "how hot", "how cold", "rain", "umbrella", "jacket", "windy", "sunny"]
+        if any(w in clean for w in weather_keywords):
             city = None
             m = re.search(r'(?:in|for)\s+([a-zA-Z\s]+)', clean)
             if m:
                 city = m.group(1).replace("today", "").replace("tomorrow", "").strip()
-            return get_weather(city)
 
-        # 3. Gemini LLM with Google Search Grounding (if API key provided)
+            if self._gemini_client:
+                weather_ctx = get_weather_context(city)
+                weather_prompt = (
+                    f"User Question: {query}\n\n"
+                    f"Live Multi-Day Weather Data:\n{weather_ctx}\n\n"
+                    "Using the live weather data above, answer the user's specific question (e.g. for today, tomorrow, or a specific day) "
+                    "directly in 1 concise spoken sentence without markdown, asterisks, or disclaimers."
+                )
+                try:
+                    response = self._gemini_client.models.generate_content(
+                        model=os.getenv("GEMINI_MODEL", "gemini-3.6-flash"),
+                        contents=weather_prompt,
+                        config={
+                            "system_instruction": "You are a fast, voice-first smart home assistant. Answer directly in 1 short spoken sentence based on the provided live weather data. No markdown, asterisks, or disclaimers."
+                        },
+                    )
+                    text = response.text.strip()
+                    return clean_speech_text(text)
+                except Exception as e:
+                    print(f"[WARN] Gemini weather reasoning failed ({e}), falling back to local weather...")
+
+            # Fallback to local deterministic weather if Gemini is unavailable
+            return get_weather(city, query=clean)
+
+        # 3. Gemini LLM Reasoning (Super-fast conversational intelligence)
         if self._gemini_client:
             try:
                 system_prompt = (
-                    "You are a helpful, voice-first smart display assistant. "
-                    "Provide accurate, clear, and direct answers in 1 to 2 concise sentences suitable for spoken audio. "
-                    "Do not use markdown, bullet points, asterisks, or citations in your speech output."
+                    "You are a fast, voice-first smart home assistant. "
+                    "Be extremely direct, simple, and concise. "
+                    "Provide a simple, clear 1-sentence answer for general questions or facts. "
+                    "Do not give unsolicited background, lengthy safety disclaimers, or multi-paragraph context unless the user specifically asks you to 'explain', 'elaborate', or 'give details'. "
+                    "Never use markdown, bullet points, asterisks, or citations."
                 )
-                response = self._gemini_client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=clean,
-                    config={
-                        "system_instruction": system_prompt,
-                        # Enable Google Search grounding for real-time web research
-                        "tools": [{"google_search": {}}],
-                    },
-                )
+                model_to_use = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+
+                # If query needs external web search or latest info
+                context = ""
+                if any(w in clean for w in ["search for", "latest news", "today's news", "live score"]):
+                    search_res = search_web(query)
+                    if search_res:
+                        context = f"\nRelevant web search data: {search_res}"
+
+                prompt = f"{clean}{context}"
+                try:
+                    response = self._gemini_client.models.generate_content(
+                        model=model_to_use,
+                        contents=prompt,
+                        config={"system_instruction": system_prompt},
+                    )
+                except Exception:
+                    response = self._gemini_client.models.generate_content(
+                        model="gemini-flash-latest",
+                        contents=prompt,
+                        config={"system_instruction": system_prompt},
+                    )
                 text = response.text.strip()
-                # Clean up any lingering markdown asterisks
-                text = re.sub(r'[*_#`]', '', text)
-                return text
+                return clean_speech_text(text)
             except Exception as e:
                 print(f"[WARN] Gemini reasoning failed ({e}), falling back to web search...")
 
@@ -82,7 +122,7 @@ class IntentEngine:
         print(f"[RESEARCH] Querying web search for: '{query}'...")
         web_answer = search_web(query)
         if web_answer and len(web_answer) > 10:
-            return web_answer
+            return clean_speech_text(web_answer)
 
         return f"I couldn't find a definitive answer for {query}."
 

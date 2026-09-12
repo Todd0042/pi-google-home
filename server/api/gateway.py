@@ -7,10 +7,12 @@ GPU-accelerated STT (Whisper), LLM reasoning, and neural TTS synthesis (Piper).
 import os
 import sys
 import json
+import re
 import asyncio
 from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
 # Path setup
@@ -24,6 +26,7 @@ from shared.protocol import Message, EventType
 from server.stt.transcriber import WhisperTranscriber
 from server.tts.synthesizer import PiperSynthesizer
 from server.brain.intent import IntentEngine
+from server.integrations.weather import get_weather_display_data
 
 load_dotenv()
 
@@ -35,6 +38,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Active Display UI WebSocket connections
+display_connections: set[WebSocket] = set()
+
+async def broadcast_to_displays(event_type: str, payload: dict):
+    """Broadcasts assistant and environmental events to all connected display dashboards."""
+    if not display_connections:
+        return
+    msg = json.dumps({"type": event_type, "payload": payload})
+    disconnected = set()
+    for ws in list(display_connections):
+        try:
+            await ws.send_text(msg)
+        except Exception:
+            disconnected.add(ws)
+    if disconnected:
+        display_connections.difference_update(disconnected)
 
 # Global Engine Singletons (Lazy-loaded on startup)
 stt_engine: Optional[WhisperTranscriber] = None
@@ -71,6 +91,32 @@ async def health_check():
         "tts_voice": tts_engine.voice_name if tts_engine else "uninitialized",
     }
 
+@app.get("/api/weather")
+async def weather_api(location: Optional[str] = None):
+    """Fetches full display weather JSON with auto-location discovery."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, get_weather_display_data, location)
+
+@app.websocket("/ws/display")
+async def display_websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    display_connections.add(websocket)
+    client_ip = websocket.client.host if websocket.client else "unknown"
+    print(f"[DISPLAY CONNECTED] Dashboard connected from {client_ip}")
+    try:
+        # Send initial ready state
+        await websocket.send_text(json.dumps({"type": "state_change", "payload": {"state": "ready"}}))
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text(json.dumps({"type": "pong"}))
+    except WebSocketDisconnect:
+        print(f"[DISPLAY DISCONNECTED] Dashboard from {client_ip} disconnected.")
+    except Exception as e:
+        print(f"[DISPLAY WS ERROR] {e}")
+    finally:
+        display_connections.discard(websocket)
+
 @app.websocket("/ws/assistant")
 async def assistant_websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -103,6 +149,7 @@ async def assistant_websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text(
                         Message(type=EventType.STATE_CHANGE, payload={"state": AssistantState.LISTENING}).to_json()
                     )
+                    await broadcast_to_displays("state_change", {"state": "listening"})
 
                 elif event_type == EventType.SPEECH_END:
                     print(f"[EVENT] Speech ended. Captured {len(audio_buffer)} audio bytes.")
@@ -110,12 +157,14 @@ async def assistant_websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text(
                         Message(type=EventType.STATE_CHANGE, payload={"state": AssistantState.THINKING}).to_json()
                     )
+                    await broadcast_to_displays("state_change", {"state": "thinking"})
 
                     if len(audio_buffer) < 3200:  # Less than 100ms of audio
                         print("[WARN] Audio buffer too small. Ignoring.")
                         await websocket.send_text(
                             Message(type=EventType.STATE_CHANGE, payload={"state": AssistantState.IDLE}).to_json()
                         )
+                        await broadcast_to_displays("state_change", {"state": "ready"})
                         continue
 
                     # 1. Transcribe audio (Whisper on GPU)
@@ -126,12 +175,14 @@ async def assistant_websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text(
                         Message(type=EventType.TRANSCRIPTION, payload={"text": transcription}).to_json()
                     )
+                    await broadcast_to_displays("transcription", {"text": transcription})
 
                     if not transcription:
                         print("[WARN] No speech detected in audio buffer.")
                         await websocket.send_text(
                             Message(type=EventType.STATE_CHANGE, payload={"state": AssistantState.IDLE}).to_json()
                         )
+                        await broadcast_to_displays("state_change", {"state": "ready"})
                         continue
 
                     # 2. Reasoning / Intent resolution (Local intents or LLM)
@@ -142,22 +193,28 @@ async def assistant_websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text(
                         Message(type=EventType.ASSISTANT_REPLY, payload={"text": reply_text}).to_json()
                     )
+                    await broadcast_to_displays("assistant_reply", {"text": reply_text})
 
-                    # 3. Neural Voice Synthesis (Piper)
+                    # 3. Neural Voice Synthesis (Piper) - Progressive sentence streaming
                     current_state = AssistantState.SPEAKING
                     await websocket.send_text(
                         Message(type=EventType.STATE_CHANGE, payload={"state": AssistantState.SPEAKING}).to_json()
                     )
-                    
-                    wav_bytes = await loop.run_in_executor(
-                        None, tts_engine.synthesize, reply_text
-                    )
+                    await broadcast_to_displays("state_change", {"state": "speaking"})
 
-                    # Notify client audio is starting, send audio, then notify end
-                    await websocket.send_text(
-                        Message(type=EventType.TTS_START, payload={"size": len(wav_bytes), "format": "wav"}).to_json()
-                    )
-                    await websocket.send_bytes(wav_bytes)
+                    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', reply_text) if s.strip()]
+                    if not sentences:
+                        sentences = [reply_text]
+
+                    for s in sentences:
+                        wav_bytes = await loop.run_in_executor(
+                            None, tts_engine.synthesize, s
+                        )
+                        await websocket.send_text(
+                            Message(type=EventType.TTS_START, payload={"size": len(wav_bytes), "format": "wav"}).to_json()
+                        )
+                        await websocket.send_bytes(wav_bytes)
+
                     await websocket.send_text(
                         Message(type=EventType.TTS_END).to_json()
                     )
@@ -167,6 +224,7 @@ async def assistant_websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text(
                         Message(type=EventType.STATE_CHANGE, payload={"state": AssistantState.IDLE}).to_json()
                     )
+                    await broadcast_to_displays("state_change", {"state": "ready"})
                     audio_buffer.clear()
 
     except WebSocketDisconnect:
@@ -177,6 +235,11 @@ async def assistant_websocket_endpoint(websocket: WebSocket):
             await websocket.send_text(Message(type=EventType.ERROR, payload={"error": str(e)}).to_json())
         except Exception:
             pass
+
+# Mount static files for Smart Display UI
+_display_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../display"))
+if os.path.exists(_display_dir):
+    app.mount("/display", StaticFiles(directory=_display_dir, html=True), name="display")
 
 def run():
     import uvicorn
