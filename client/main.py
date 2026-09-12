@@ -60,7 +60,7 @@ class AssistantClient:
 
     async def ensure_transport(self):
         """Maintains an active, pre-warmed persistent connection to the host server."""
-        if not self.transport.ws or self.transport.ws.closed:
+        if not self.transport.is_connected:
             try:
                 await self.transport.connect()
                 print("[CONNECTED] Persistent link to host PC server ready.")

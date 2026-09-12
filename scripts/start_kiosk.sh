@@ -30,19 +30,11 @@ while [ $MAX_WAIT -gt 0 ]; do
   MAX_WAIT=$((MAX_WAIT - 1))
 done
 
-# Launch Cage with Chromium in kiosk mode
-exec cage -- chromium \
-  --kiosk \
-  --noerrdialogs \
-  --disable-infobars \
-  --no-first-run \
-  --ozone-platform=wayland \
-  --renderer-process-limit=1 \
-  --js-flags="--max-old-space-size=128" \
-  --disable-dev-shm-usage \
-  --check-for-update-interval=31536000 \
-  --disable-pinch \
-  --autoplay-policy=no-user-gesture-required \
-  --disable-translate \
-  --disable-session-crashed-bubble \
-  "${SERVER_URL}"
+# Launch Cage with native Pygame smart display (~30MB RAM vs 300MB Chromium)
+REPO_DIR="/home/alarm/pi-google-home"
+if [ ! -d "$REPO_DIR" ]; then
+  REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+fi
+cd "$REPO_DIR"
+
+exec cage -- python -u client/display/pygame_display.py

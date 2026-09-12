@@ -13,6 +13,17 @@ class AssistantClientTransport:
         self.server_url = server_url
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
 
+    @property
+    def is_connected(self) -> bool:
+        """Returns True if the WebSocket connection is active and open."""
+        if not self.ws:
+            return False
+        if hasattr(self.ws, "closed"):
+            return not self.ws.closed
+        if hasattr(self.ws, "state"):
+            return str(getattr(self.ws.state, "name", self.ws.state)).upper() == "OPEN"
+        return True
+
     async def connect(self):
         """Connects to the server WebSocket endpoint."""
         self.ws = await websockets.connect(self.server_url)
