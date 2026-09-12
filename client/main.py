@@ -27,8 +27,7 @@ CHUNK_SIZE = 1280  # 80ms chunks for wake word
 STREAM_CHUNK = 1024
 DEFAULT_SERVER_URL = "ws://192.168.1.236:8765/ws/assistant"
 WAKE_KEYWORD = "hey_jarvis"
-WAKE_THRESHOLD = 0.5
-SILENCE_RMS = 60.0
+WAKE_THRESHOLD = 0.40
 SPEECH_RMS = 120.0
 POST_SPEECH_SILENCE_SEC = 1.2
 MAX_RECORDING_SEC = 6.0
@@ -44,7 +43,10 @@ class AssistantClient:
         self.keyword = keyword
         self.player = AudioPlayer()
         self.pa = pyaudio.PyAudio()
-        self.ambient_rms = 100.0  # Rolling baseline of room noise floor
+        self.ambient_rms = 70.0  # Rolling baseline of room noise floor
+
+        # Ensure hardware AGC is disabled for high-fidelity wake-word neural inference
+        os.system("amixer -c 0 sset 'Auto Gain Control' off >/dev/null 2>&1")
 
         print(f"\n[INIT] Initializing openWakeWord models for keyword: '{self.keyword}'...")
         all_paths = openwakeword.get_pretrained_model_paths("onnx")
@@ -57,17 +59,17 @@ class AssistantClient:
 
     async def record_and_stream(self, transport: AssistantClientTransport, mic_stream, baseline_ambient: float) -> None:
         """Records voice command until end-of-speech silence is detected, streaming to server."""
-        print("\n[LISTENING] >>> Listening for your voice query... <<<")
+        print("\n[LISTENING] >>> Listening for your voice query... <<<", flush=True)
         speech_started = False
         silence_start_time = None
         record_start_time = time.time()
         peak_rms = 0.0
 
         # Calibrate directly from the continuous room noise baseline captured BEFORE keyword
-        ambient_rms = max(50.0, baseline_ambient)
-        speech_threshold = max(280.0, ambient_rms * 1.8)
-        silence_threshold = max(ambient_rms * 1.25, ambient_rms + 35.0)
-        post_speech_silence_sec = 0.50  # 500ms snappy silence cutoff
+        ambient_rms = max(30.0, baseline_ambient)
+        speech_threshold = max(180.0, ambient_rms * 1.8)
+        silence_threshold = max(ambient_rms * 1.25, ambient_rms + 25.0)
+        post_speech_silence_sec = 0.65  # 650ms snappy silence cutoff
 
         while True:
             raw = mic_stream.read(STREAM_CHUNK, exception_on_overflow=False)
@@ -190,30 +192,27 @@ class AssistantClient:
                 rms = calculate_rms(audio_data)
 
                 # Continuously track ambient noise floor while idle (exclude loud spikes)
-                if rms < 400.0:
+                if rms < 300.0:
                     self.ambient_rms = 0.95 * self.ambient_rms + 0.05 * rms
 
-                # Energy gating
-                if rms < SILENCE_RMS:
-                    print(f"\r[Listening for 'Hey Jarvis'...] (Mic: {rms:4.1f} | Ambient: {self.ambient_rms:4.1f})", end="", flush=True)
-                    self.oww_model.preprocessor.audio_buffer.extend(audio_data)
-                    await asyncio.sleep(0.01)
-                    continue
-
-                # Run neural inference
+                # Continuously feed audio into neural model to maintain temporal embedding context
                 predictions = self.oww_model.predict(audio_data)
                 score = predictions.get(self.active_model, 0.0)
 
+                # Diagnostic log whenever audio resembles wake word features
+                if score >= 0.15:
+                    print(f"\n[VOICE ACTIVITY] Wake word '{self.active_model}' score: {score:.3f} | RMS: {rms:.1f}", flush=True)
+
                 if score >= WAKE_THRESHOLD:
                     print(f"\n\n{'*' * 60}")
-                    print(f" [WAKE TRIGGERED] Score: {score:.3f} | Ambient: {self.ambient_rms:.1f} RMS")
-                    print(f"{'*' * 60}")
+                    print(f" [WAKE TRIGGERED] Score: {score:.3f} | Ambient: {self.ambient_rms:.1f} RMS", flush=True)
+                    print(f"{'*' * 60}", flush=True)
                     await self.handle_turn(mic_stream, baseline_ambient=self.ambient_rms)
                     self._flush_mic_buffer(mic_stream)
                     self.oww_model.reset()
-                    print("\n[READY] Listening for 'Hey Jarvis' again...\n")
+                    print("\n[READY] Listening for 'Hey Jarvis' again...\n", flush=True)
 
-                await asyncio.sleep(0.005)
+                await asyncio.sleep(0.002)
 
         except KeyboardInterrupt:
             print("\nShutting down assistant client...")
