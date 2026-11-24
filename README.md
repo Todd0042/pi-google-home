@@ -8,7 +8,7 @@
 
 # 🎙️ Pi Google Home — Distributed Smart Display & AI Voice Assistant Appliance
 
-[![License: PolyForm Noncommercial](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-00f0ff.svg)](LICENSE)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-00f0ff.svg)](LICENSE)
 [![Platform: Raspberry Pi + Linux](https://img.shields.io/badge/Platform-Raspberry%20Pi%203%20B%2B%20%7C%20Linux%20PC-orange.svg)]()
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-39ff14.svg)]()
 [![STT: Whisper](https://img.shields.io/badge/STT-faster--whisper-blue.svg)]()
@@ -87,7 +87,7 @@
 
 Commercial smart speakers rely on always-on cloud servers, harvesting voice telemetry, logging conversation histories, and becoming obsolete when cloud vendors discontinue support.
 
-**Pi Google Home** is an open-source, private, distributed smart display appliance that delivers the responsive utility of commercial smart displays while keeping **100% of audio and inference on your local network**:
+**Pi Google Home** is a source-available, private, distributed smart display appliance that delivers the responsive utility of commercial smart displays while keeping **100% of audio and inference on your local network**:
 1. **Edge Client Efficiency**: A Raspberry Pi 3 B+ handles continuous microphone listening, hardware wake word detection, audio capture, and full-screen kiosk rendering.
 2. **Heavy-Lifting Server Host**: Runs GPU/CPU-accelerated Speech-to-Text (Faster-Whisper), neural voice synthesis (Piper), and local LLM intent routing on your home server or desktop PC.
 3. **Low-Latency Streaming**: Audio is streamed in raw PCM chunks over persistent WebSockets with duplex state synchronization, achieving sub-second speech recognition and immediate spoken responses.
